@@ -235,23 +235,42 @@ def get_artifact_by_id(artifact_id: int) -> Optional[Dict[str, Any]]:
         return data
 
 
-def search_artifacts(query: str, limit: int = 50, tags: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    """Search across textual columns and optionally filter by tags.
+def search_artifacts(
+    query: str,
+    limit: int = 50,
+    tags: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Search artifacts by keywords in text fields and optional tags."""
 
-    If tags are provided, all tags must be present in the artifact's tag string.
-    """
+    keywords = [kw for kw in (query or "").split() if kw]
+    tag_filters = _normalize_tags_input(tags)
+
     with get_db() as db:
-        pattern = f"%{query}%"
-        q = db.query(Artifact).filter(
-            (Artifact.name.ilike(pattern))
-            | (Artifact.description.ilike(pattern))
-            | (Artifact.cultural_context.ilike(pattern))
-            | (Artifact.material.ilike(pattern))
-        )
-        tag_filters = _normalize_tags_input(tags)
+        q = db.query(Artifact)
+
+        if keywords:
+            for kw in keywords:
+                pattern = f"%{kw}%"
+                q = q.filter(
+                    Artifact.id.in_(
+                        db.query(Artifact.id)
+                        .filter(
+                            (Artifact.name.ilike(pattern))
+                            | (Artifact.description.ilike(pattern))
+                            | (Artifact.cultural_context.ilike(pattern))
+                            | (Artifact.material.ilike(pattern))
+                            | (Artifact.tags.ilike(pattern))
+                        )
+                    )
+                )
+        else:
+            # No keywords: still allow tag filtering without restricting base query
+            q = q.filter(True)  # no-op filter for consistent chaining
+
         if tag_filters:
             for t in tag_filters:
                 q = q.filter(Artifact.tags.ilike(f"%{t}%"))
+
         artifacts = q.order_by(Artifact.uploaded_at.desc()).limit(limit).all()
         return [a.to_dict() for a in artifacts]
 

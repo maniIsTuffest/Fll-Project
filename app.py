@@ -490,7 +490,7 @@ def archive_page():
 
         # Otherwise, show gallery grid (optionally filtered)
         if search_q:
-            results = search_artifacts(search_q, limit=50, tags=[search_q])
+            results = search_artifacts(search_q, limit=50)
             # search_artifacts may not include images; fetch per id to ensure image
             artifacts = []
             for r in results:
@@ -533,7 +533,12 @@ def archive_page():
                                 st.markdown("**Tags:**")
                                 render_tag_chips(tags)
 
-                            if st.button("Remove", key=f"remove_artifact_{artifact.get('id')}"):
+                            remove_key = f"remove_artifact_{artifact.get('id')}"
+                            st.markdown(
+                                f"<style>div[data-testid='stButton'][key='{remove_key}'] button {{ background-color:#d9534f; color:white; border:none; }} div[data-testid='stButton'][key='{remove_key}'] button:hover {{ background-color:#c9302c; }}</style>",
+                                unsafe_allow_html=True,
+                            )
+                            if st.button("Remove", key=remove_key):
                                 try:
                                     deleted = delete_artifact(artifact.get('id'))
                                     if deleted:
