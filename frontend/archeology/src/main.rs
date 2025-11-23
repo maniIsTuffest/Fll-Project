@@ -3,31 +3,31 @@
 //! A desktop application for identifying historical artifacts using AI analysis.
 
 use std::time::Duration;
-
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::Utc;
 use dioxus::prelude::*;
+use dioxus::html::FileData;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 // Error Types
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 
 /// Application-level errors
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("Network error: {0}")]
     Network(String),
-    
+
     #[error("API error: {0}")]
     Api(String),
-    
+
     #[error("Serialization error: {0}")]
     Serialization(String),
-    
+
     #[error("File processing error: {0}")]
     FileProcessing(String),
 }
@@ -35,9 +35,9 @@ pub enum AppError {
 /// Result type alias for application operations
 pub type AppResult<T> = Result<T, AppError>;
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 // Data Structures
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 
 /// Main application state
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -88,6 +88,7 @@ struct CreateArtifactRequest {
 struct AnalyzeResponse {
     name: String,
     description: String,
+    era: String,
     confidence: f32,
     method: Option<String>,
     tier: String,
@@ -109,9 +110,9 @@ struct ApiArtifact {
     confidence: Option<f32>,
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 // Constants
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 
 /// API base URL
 const API_BASE_URL: &str = "http://localhost:8000/api";
@@ -119,12 +120,12 @@ const API_BASE_URL: &str = "http://localhost:8000/api";
 /// Default analysis tier
 const DEFAULT_ANALYSIS_TIER: &str = "fast";
 
-/// Maximum file size for upload (10MB)
-const MAX_FILE_SIZE_BYTES: usize = 10 * 1024 * 1024;
+/// Maximum file size for upload (200MB)
+const MAX_FILE_SIZE_BYTES: usize = 200 * 1024 * 1024;
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 // Main Application
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 
 fn main() {
     launch(App);
@@ -133,51 +134,46 @@ fn main() {
 /// Root application component
 #[component]
 fn App() -> Element {
-    let mut state = use_signal(|| AppState::default());
-    
-    use_effect(|| {
+    let state = use_signal(|| AppState::default());
+
+    use_effect(move || {
         to_owned![state];
-        async move {
+        spawn(async move {
             if let Err(error) = load_initial_artifacts(state).await {
                 log::error!("Failed to load initial artifacts: {}", error);
             }
-        }
+        });
     });
 
     rsx! {
-        div {
-            class: "app-container",
+        div { class: "app-container",
             AppHeader {}
             AppMainContent { state: state.clone() }
         }
     }
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 // UI Components
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 
 /// Application header component
 #[component]
 fn AppHeader() -> Element {
     rsx! {
-        header {
-            class: "app-header",
+        header { class: "app-header",
             h1 { "🏺 Archaeology Artifact Identifier" }
             p { "Upload images to identify historical artifacts using AI analysis" }
         }
     }
 }
 
-/// Main content area component
 #[component]
 fn AppMainContent(state: Signal<AppState>) -> Element {
     rsx! {
-        main {
-            class: "app-main",
+        main { class: "app-main",
             LoadingIndicator { visible: state().loading }
-            div {
-                class: "content-grid",
+            div { class: "content-grid",
                 IdentifyArtifactPanel { state: state.clone() }
                 ArtifactArchivePanel { state: state.clone() }
             }
@@ -185,22 +181,19 @@ fn AppMainContent(state: Signal<AppState>) -> Element {
     }
 }
 
-/// Loading indicator component
 #[component]
 fn LoadingIndicator(visible: bool) -> Element {
     if !visible {
         return rsx! {}.into();
     }
-    
+
     rsx! {
-        div {
-            class: "loading-indicator",
+        div { class: "loading-indicator",
             p { "Loading artifacts..." }
         }
     }
 }
 
-/// Panel for identifying new artifacts
 #[component]
 fn IdentifyArtifactPanel(state: Signal<AppState>) -> Element {
     let status_message = use_signal(|| "Upload an image to identify artifacts".to_string());
@@ -208,8 +201,7 @@ fn IdentifyArtifactPanel(state: Signal<AppState>) -> Element {
     let selected_tier = use_signal(|| DEFAULT_ANALYSIS_TIER.to_string());
 
     rsx! {
-        section {
-            class: "identify-panel",
+        section { class: "identify-panel",
             IdentifyArtifactHeader {}
             TierSelector { selected_tier: selected_tier.clone() }
             FileUploadArea {
@@ -227,27 +219,24 @@ fn IdentifyArtifactPanel(state: Signal<AppState>) -> Element {
     }
 }
 
-/// Header for identification panel
 #[component]
 fn IdentifyArtifactHeader() -> Element {
     rsx! {
-        div {
-            class: "panel-header",
+        div { class: "panel-header",
             h2 { "🔍 Identify Artifact" }
         }
     }
 }
 
-/// Tier selection component
 #[component]
 fn TierSelector(selected_tier: Signal<String>) -> Element {
     rsx! {
-        div {
-            class: "tier-selector",
-            label { 
+        div { class: "tier-selector",
+            label {
                 "Analysis Tier: ",
                 select {
-                    value: "{selected_tier}",
+                    // render actual current value from the signal
+                    value: "{selected_tier()}",
                     onchange: move |event| selected_tier.set(event.value().clone()),
                     option { value: "instant", "⚡ Instant" }
                     option { value: "fast", "🚀 Fast" }
@@ -259,7 +248,6 @@ fn TierSelector(selected_tier: Signal<String>) -> Element {
     }
 }
 
-/// File upload area component
 #[component]
 fn FileUploadArea(
     state: Signal<AppState>,
@@ -268,29 +256,27 @@ fn FileUploadArea(
     selected_tier: Signal<String>,
 ) -> Element {
     let handle_file_select = move |event: Event<FormData>| {
-        if let Some(file_engine) = event.files() {
-            let files = file_engine.files();
-            if let Some(file) = files.get(0) {
-                process_uploaded_file(
-                    file,
-                    state.clone(),
-                    status_message.clone(),
-                    is_processing.clone(),
-                    selected_tier.clone(),
-                );
-            }
+        let files = event.files();
+        // files.get(0) returns FileData; clone it to move into task
+        if let Some(file) = files.get(0).cloned() {
+            process_uploaded_file(
+                file,
+                state.clone(),
+                status_message.clone(),
+                is_processing.clone(),
+                selected_tier.clone(),
+            );
         }
     };
 
     rsx! {
-        div {
-            class: "file-upload-area",
+        div { class: "file-upload-area",
             input {
                 r#type: "file",
                 accept: "image/*",
                 onchange: handle_file_select,
                 id: "file-input",
-                disabled: is_processing(),
+                disabled: "{is_processing()}"
             }
             label {
                 r#for: "file-input",
@@ -303,42 +289,37 @@ fn FileUploadArea(
     }
 }
 
-/// Processing status display component
 #[component]
 fn ProcessingStatus(is_processing: Signal<bool>, status_message: Signal<String>) -> Element {
     rsx! {
-        div {
-            class: "processing-status",
+        div { class: "processing-status",
             if is_processing() {
-                div {
-                    class: "processing-indicator",
+                div { class: "processing-indicator",
                     div { "⏳" }
                     p { "Analyzing artifact..." }
                 }
             }
-            p { class: "status-message", "{status_message}" }
+            p { class: "status-message", "{status_message()}" }
         }
     }
 }
 
-/// Analysis result display component
 #[component]
 fn AnalysisResult(state: Signal<AppState>) -> Element {
-    if state().current_artifact.is_none() {
+    let state_read = state.read();
+    if state_read.current_artifact.is_none() {
         return rsx! {}.into();
     }
-    
-    let artifact = state().current_artifact.as_ref().unwrap();
+
+    let artifact = state_read.current_artifact.as_ref().unwrap();
     let confidence_percent = artifact.confidence * 100.0;
-    
+
     rsx! {
-        div {
-            class: "analysis-result",
+        div { class: "analysis-result",
             h3 { "🎯 Identification Result" }
-            div {
-                class: "result-content",
+            div { class: "result-content",
                 ArtifactImage { artifact: artifact.clone() }
-                ArtifactDetails { 
+                ArtifactDetails {
                     artifact: artifact.clone(),
                     confidence_percent,
                 }
@@ -347,18 +328,14 @@ fn AnalysisResult(state: Signal<AppState>) -> Element {
     }
 }
 
-/// Artifact image display component
 #[component]
 fn ArtifactImage(artifact: Artifact) -> Element {
     if artifact.image_data.is_empty() {
-        return rsx! { 
-            div { 
-                class: "artifact-image-placeholder",
-                "🏺" 
-            } 
+        return rsx! {
+            div { class: "artifact-image-placeholder", "🏺" }
         }.into();
     }
-    
+
     rsx! {
         img {
             class: "artifact-image",
@@ -370,18 +347,16 @@ fn ArtifactImage(artifact: Artifact) -> Element {
     }
 }
 
-/// Artifact details display component
 #[component]
 fn ArtifactDetails(artifact: Artifact, confidence_percent: f32) -> Element {
     rsx! {
-        div {
-            class: "artifact-details",
+        div { class: "artifact-details",
             h4 { "{artifact.name}" }
             p { "📅 Era: {artifact.era}" }
             p { "📝 {artifact.description}" }
             p { "🎯 Confidence: {confidence_percent:.1}%" }
             p { "⚡ Tier: {artifact.tier}" }
-            OptionalDetail { 
+            OptionalDetail {
                 value: artifact.method.clone(),
                 label: "🔧 Method:",
             }
@@ -394,43 +369,37 @@ fn ArtifactDetails(artifact: Artifact, confidence_percent: f32) -> Element {
     }
 }
 
-/// Optional detail field component
 #[component]
 fn OptionalDetail(value: Option<String>, label: &'static str) -> Element {
     if let Some(value) = value {
-        rsx! { p { "{label} {value}" } }
+        rsx! {
+            p { "{label} {value}" }
+        }
     } else {
         rsx! {}.into()
     }
 }
 
-/// Artifact tags display component
 #[component]
 fn ArtifactTags(tags: Vec<String>) -> Element {
     if tags.is_empty() {
         return rsx! {}.into();
     }
-    
+
     rsx! {
-        div {
-            class: "artifact-tags",
+        div { class: "artifact-tags",
             "🏷️ Tags: ",
             for tag in tags {
-                span { 
-                    class: "tag",
-                    "{tag}" 
-                }
+                span { class: "tag", "{tag}" }
             }
         }
     }
 }
 
-/// Panel for browsing artifact archive
 #[component]
 fn ArtifactArchivePanel(state: Signal<AppState>) -> Element {
     rsx! {
-        section {
-            class: "archive-panel",
+        section { class: "archive-panel",
             ArchiveHeader {}
             ArchiveControls { state: state.clone() }
             ArtifactGrid { state: state.clone() }
@@ -438,18 +407,15 @@ fn ArtifactArchivePanel(state: Signal<AppState>) -> Element {
     }
 }
 
-/// Header for archive panel
 #[component]
 fn ArchiveHeader() -> Element {
     rsx! {
-        div {
-            class: "panel-header",
+        div { class: "panel-header",
             h2 { "📚 Artifact Archive" }
         }
     }
 }
 
-/// Archive search and filter controls
 #[component]
 fn ArchiveControls(state: Signal<AppState>) -> Element {
     let search_query = use_signal(|| String::new());
@@ -470,8 +436,7 @@ fn ArchiveControls(state: Signal<AppState>) -> Element {
     };
 
     rsx! {
-        div {
-            class: "archive-controls",
+        div { class: "archive-controls",
             SearchBox {
                 query: search_query.clone(),
                 on_search: handle_search,
@@ -483,7 +448,6 @@ fn ArchiveControls(state: Signal<AppState>) -> Element {
     }
 }
 
-/// Search box component
 #[component]
 fn SearchBox(
     query: Signal<String>,
@@ -491,12 +455,11 @@ fn SearchBox(
     is_searching: Signal<bool>,
 ) -> Element {
     rsx! {
-        div {
-            class: "search-box",
+        div { class: "search-box",
             input {
                 r#type: "text",
                 placeholder: "Search artifacts...",
-                value: "{query}",
+                value: "{query()}",
                 oninput: move |event| query.set(event.value().clone()),
                 onkeypress: move |event| {
                     if event.key() == Key::Enter {
@@ -506,20 +469,22 @@ fn SearchBox(
             }
             button {
                 onclick: move |_| on_search.call(()),
-                disabled: is_searching(),
+                disabled: "{is_searching()}",
                 class: "search-button",
-                if is_searching() { "Searching..." } else { "🔍 Search" }
+                if is_searching() {
+                    "Searching..."
+                } else {
+                    "🔍 Search"
+                }
             }
         }
     }
 }
 
-/// Era filter component
 #[component]
 fn EraFilter(current_filter: Signal<String>) -> Element {
     rsx! {
-        div {
-            class: "era-filter",
+        div { class: "era-filter",
             select {
                 onchange: move |event| current_filter.set(event.value().clone()),
                 option { value: "all", "All Eras" }
@@ -532,38 +497,33 @@ fn EraFilter(current_filter: Signal<String>) -> Element {
     }
 }
 
-/// Artifact count display component
 #[component]
 fn ArtifactCount(state: Signal<AppState>) -> Element {
     let total_count = state().artifacts.len();
     let filtered_count = compute_filtered_count(state);
-    
+
     rsx! {
-        div {
-            class: "artifact-count",
+        div { class: "artifact-count",
             p { "Total artifacts: {total_count}" }
             p { "Showing: {filtered_count}" }
         }
     }
 }
 
-/// Grid display of artifacts
 #[component]
 fn ArtifactGrid(state: Signal<AppState>) -> Element {
     let artifacts = state().artifacts.clone();
-    
+
     if artifacts.is_empty() {
         return rsx! {
-            div {
-                class: "empty-archive",
+            div { class: "empty-archive",
                 p { "No artifacts identified yet. Upload an image to get started!" }
             }
         }.into();
     }
-    
+
     rsx! {
-        div {
-            class: "artifact-grid",
+        div { class: "artifact-grid",
             for artifact in artifacts {
                 ArtifactCard {
                     artifact: artifact.clone(),
@@ -574,7 +534,6 @@ fn ArtifactGrid(state: Signal<AppState>) -> Element {
     }
 }
 
-/// Individual artifact card component
 #[component]
 fn ArtifactCard(artifact: Artifact, on_delete: EventHandler<i32>) -> Element {
     rsx! {
@@ -582,7 +541,7 @@ fn ArtifactCard(artifact: Artifact, on_delete: EventHandler<i32>) -> Element {
             class: "artifact-card",
             key: "{artifact.id:?}",
             ArtifactCardImage { artifact: artifact.clone() }
-            ArtifactCardDetails { 
+            ArtifactCardDetails {
                 artifact: artifact.clone(),
                 on_delete: on_delete,
             }
@@ -590,22 +549,18 @@ fn ArtifactCard(artifact: Artifact, on_delete: EventHandler<i32>) -> Element {
     }
 }
 
-/// Artifact card image component
 #[component]
 fn ArtifactCardImage(artifact: Artifact) -> Element {
     let image_src = artifact.thumbnail
         .clone()
         .unwrap_or(artifact.image_data.clone());
-    
+
     if image_src.is_empty() {
-        return rsx! { 
-            div { 
-                class: "card-image-placeholder",
-                "🏺" 
-            } 
+        return rsx! {
+            div { class: "card-image-placeholder", "🏺" }
         }.into();
     }
-    
+
     rsx! {
         img {
             class: "card-image",
@@ -617,14 +572,12 @@ fn ArtifactCardImage(artifact: Artifact) -> Element {
     }
 }
 
-/// Artifact card details component
 #[component]
 fn ArtifactCardDetails(artifact: Artifact, on_delete: EventHandler<i32>) -> Element {
     let confidence_percent = artifact.confidence * 100.0;
-    
+
     rsx! {
-        div {
-            class: "card-details",
+        div { class: "card-details",
             h3 { "{artifact.name}" }
             p { "Era: {artifact.era}" }
             p { "{artifact.description}" }
@@ -632,7 +585,7 @@ fn ArtifactCardDetails(artifact: Artifact, on_delete: EventHandler<i32>) -> Elem
             p { "Tier: {artifact.tier}" }
             UploadTime { uploaded_at: artifact.uploaded_at.clone() }
             CardTags { tags: artifact.tags.clone() }
-            DeleteButton { 
+            DeleteButton {
                 artifact_id: artifact.id,
                 on_delete: on_delete,
             }
@@ -640,37 +593,32 @@ fn ArtifactCardDetails(artifact: Artifact, on_delete: EventHandler<i32>) -> Elem
     }
 }
 
-/// Upload time display component
 #[component]
 fn UploadTime(uploaded_at: Option<String>) -> Element {
     if let Some(time) = uploaded_at {
-        rsx! { p { "Uploaded: {time}" } }
+        rsx! {
+            p { "Uploaded: {time}" }
+        }
     } else {
         rsx! {}.into()
     }
 }
 
-/// Tags display for card component
 #[component]
 fn CardTags(tags: Vec<String>) -> Element {
     if tags.is_empty() {
         return rsx! {}.into();
     }
-    
+
     rsx! {
-        div {
-            class: "card-tags",
+        div { class: "card-tags",
             for tag in tags {
-                span { 
-                    class: "card-tag",
-                    "{tag}" 
-                }
+                span { class: "card-tag", "{tag}" }
             }
         }
     }
 }
 
-/// Delete button component
 #[component]
 fn DeleteButton(artifact_id: Option<i32>, on_delete: EventHandler<i32>) -> Element {
     if let Some(id) = artifact_id {
@@ -686,77 +634,119 @@ fn DeleteButton(artifact_id: Option<i32>, on_delete: EventHandler<i32>) -> Eleme
     }
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 // Business Logic
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 
 /// Process an uploaded file for analysis
+/// Process an uploaded file for analysis
 fn process_uploaded_file(
-    file: &FileData,
-    state: Signal<AppState>,
-    status_message: Signal<String>,
-    is_processing: Signal<bool>,
-    selected_tier: Signal<String>,
+    mut file: FileData,
+    mut state: Signal<AppState>,
+    mut status_message: Signal<String>,
+    mut is_processing: Signal<bool>,
+    mut selected_tier: Signal<String>,
 ) {
     spawn(async move {
-        if let Err(error) = handle_file_processing(
-            file,
-            state,
-            status_message,
-            is_processing,
+        // Immediately set processing to true
+        is_processing.set(true);
+        status_message.set("Reading file...".to_string());
+
+        // Read the file bytes
+        let bytes = match file.read_bytes().await {
+            Ok(b) => b.to_vec(),
+            Err(e) => {
+                status_message.set(format!("❌ Failed to read file: {}", e));
+                is_processing.set(false);
+                return;
+            }
+        };
+
+        // Determine a safe file name
+        let file_name_raw = file.name();
+        let file_name = if file_name_raw.trim().is_empty() {
+            "unknown".to_string()
+        } else {
+            file_name_raw.clone()
+        };
+
+        // Run the main processing pipeline
+        let result = handle_file_processing(
+            file_name,
+            bytes,
+            state.clone(),
+            status_message.clone(),
+            is_processing.clone(),
             selected_tier(),
-        ).await {
-            status_message.set(format!("❌ Error: {}", error));
-            is_processing.set(false);
+        )
+        .await;
+
+        // ALWAYS reset is_processing at the end
+        is_processing.set(false);
+
+        // Show error message if something went wrong
+        if let Err(e) = result {
+            log::error!("Error processing uploaded file: {:?}", e);
+            status_message.set(format!("❌ Error: {}", e));
         }
     });
 }
 
 /// Handle file processing pipeline
 async fn handle_file_processing(
-    file: &FileData,
+    mut file_name: String,
+    mut file_bytes: Vec<u8>,
     mut state: Signal<AppState>,
-    status_message: Signal<String>,
-    is_processing: Signal<bool>,
-    tier: String,
+    mut status_message: Signal<String>,
+    mut is_processing: Signal<bool>,
+    mut tier: String,
 ) -> AppResult<()> {
-    is_processing.set(true);
+    // Start processing
     status_message.set("Processing image...".to_string());
 
-    let analysis_result = analyze_artifact_with_api(file, tier.clone()).await?;
+    // Call the backend API
+    let analysis_result = analyze_artifact_with_api(file_bytes.clone(), tier.clone()).await?;
+
+    // Show the identification result early
     status_message.set(format!(
         "✅ Identified: {} ({:.1}% confidence)",
         analysis_result.name,
         analysis_result.confidence * 100.0
     ));
 
-    let artifact = create_artifact_from_analysis(file, analysis_result, tier).await?;
+    // Create artifact object from analysis
+    let artifact = create_artifact_from_analysis(file_bytes, analysis_result, tier).await?;
+
+    // Save artifact to backend API
     let saved_artifact = save_artifact_to_api(&artifact).await?;
-    
-    update_state_with_new_artifact(state, saved_artifact);
-    is_processing.set(false);
-    
+
+    // Update UI state with new artifact
+    let mut state_write = state.write();
+    state_write.current_artifact = Some(saved_artifact.clone());
+    state_write.identified = true;
+    state_write.artifacts.push(saved_artifact);
+
     Ok(())
 }
 
 /// Create artifact from analysis results
 async fn create_artifact_from_analysis(
-    file: &FileData,
+    file_bytes: Vec<u8>,
     analysis: AnalyzeResponse,
     tier: String,
 ) -> AppResult<Artifact> {
-    let file_bytes = file.read().await
-        .map_err(|e| AppError::FileProcessing(e.to_string()))?;
-    
+    // Extract tags BEFORE moving analysis fields
+    let tags = extract_tags_from_analysis(&analysis);
+
     let base64_data = STANDARD.encode(&file_bytes);
     let data_url = format!("data:image/jpeg;base64,{}", base64_data);
-    
+
     Ok(Artifact {
         id: None,
         name: analysis.name,
-        description: analysis.description.clone(),
-        era: extract_era_from_description(&analysis.description),
-        tags: extract_tags_from_analysis(&analysis),
+        description: analysis.description,
+        era: analysis.era,
+        tags,
         tier,
         image_data: data_url,
         thumbnail: None,
@@ -795,16 +785,15 @@ async fn perform_search(
     mut is_searching: Signal<bool>,
 ) -> AppResult<()> {
     is_searching.set(true);
-    
+
     let artifacts = if query.is_empty() {
         load_artifacts_from_api().await?
     } else {
         search_artifacts_in_api(&query).await?
     };
-    
+
     state.write().artifacts = artifacts;
     is_searching.set(false);
-    
     Ok(())
 }
 
@@ -814,14 +803,16 @@ fn compute_filtered_count(state: Signal<AppState>) -> usize {
     state().artifacts.len()
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 // API Client Functions
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 
 /// Load initial artifacts on app startup
 async fn load_initial_artifacts(mut state: Signal<AppState>) -> AppResult<()> {
     state.write().loading = true;
+
     let artifacts = load_artifacts_from_api().await?;
+
     state.write().artifacts = artifacts;
     state.write().loading = false;
     Ok(())
@@ -829,21 +820,19 @@ async fn load_initial_artifacts(mut state: Signal<AppState>) -> AppResult<()> {
 
 /// Analyze artifact using the API
 async fn analyze_artifact_with_api(
-    file: &FileData,
+    file_bytes: Vec<u8>,
     tier: String,
 ) -> AppResult<AnalyzeResponse> {
     let client = Client::new();
-    let file_bytes = file.read().await
-        .map_err(|e| AppError::FileProcessing(e.to_string()))?;
-    
+
     let base64_data = STANDARD.encode(&file_bytes);
     let data_url = format!("data:image/jpeg;base64,{}", base64_data);
-    
+
     let request = AnalyzeRequest {
         image_data: data_url,
         tier,
     };
-    
+
     let response = client
         .post(&format!("{}/analyze", API_BASE_URL))
         .json(&request)
@@ -851,23 +840,23 @@ async fn analyze_artifact_with_api(
         .send()
         .await
         .map_err(|e| AppError::Network(e.to_string()))?;
-    
+
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
         return Err(AppError::Api(error_text));
     }
-    
+
     let analysis_result: AnalyzeResponse = response.json()
         .await
         .map_err(|e| AppError::Serialization(e.to_string()))?;
-    
+
     Ok(analysis_result)
 }
 
 /// Save artifact to API
 async fn save_artifact_to_api(artifact: &Artifact) -> AppResult<Artifact> {
     let client = Client::new();
-    
+
     let request = CreateArtifactRequest {
         name: artifact.name.clone(),
         description: artifact.description.clone(),
@@ -875,91 +864,91 @@ async fn save_artifact_to_api(artifact: &Artifact) -> AppResult<Artifact> {
         tier: artifact.tier.clone(),
         image_data: artifact.image_data.clone(),
     };
-    
+
     let response = client
         .post(&format!("{}/artifacts", API_BASE_URL))
         .json(&request)
         .send()
         .await
         .map_err(|e| AppError::Network(e.to_string()))?;
-    
+
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
         return Err(AppError::Api(error_text));
     }
-    
+
     let mut saved_artifact = artifact.clone();
     let created_response: serde_json::Value = response.json()
         .await
         .map_err(|e| AppError::Serialization(e.to_string()))?;
-    
+
     if let Some(id) = created_response.get("id").and_then(|id| id.as_i64()) {
         saved_artifact.id = Some(id as i32);
     }
-    
+
     Ok(saved_artifact)
 }
 
 /// Load all artifacts from API
 async fn load_artifacts_from_api() -> AppResult<Vec<Artifact>> {
     let client = Client::new();
-    
+
     let response = client
         .get(&format!("{}/artifacts", API_BASE_URL))
         .send()
         .await
         .map_err(|e| AppError::Network(e.to_string()))?;
-    
+
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
         return Err(AppError::Api(error_text));
     }
-    
+
     let api_artifacts: Vec<ApiArtifact> = response.json()
         .await
         .map_err(|e| AppError::Serialization(e.to_string()))?;
-    
+
     let artifacts: Vec<Artifact> = api_artifacts.into_iter()
         .map(convert_api_artifact_to_domain)
         .collect();
-    
+
     Ok(artifacts)
 }
 
 /// Search artifacts in API
 async fn search_artifacts_in_api(query: &str) -> AppResult<Vec<Artifact>> {
     let client = Client::new();
-    
+
     let response = client
         .get(&format!("{}/artifacts/search", API_BASE_URL))
         .query(&[("q", query)])
         .send()
         .await
         .map_err(|e| AppError::Network(e.to_string()))?;
-    
+
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
         return Err(AppError::Api(error_text));
     }
-    
+
     let api_artifacts: Vec<ApiArtifact> = response.json()
         .await
         .map_err(|e| AppError::Serialization(e.to_string()))?;
-    
+
     let artifacts: Vec<Artifact> = api_artifacts.into_iter()
         .map(convert_api_artifact_to_domain)
         .collect();
-    
+
     Ok(artifacts)
 }
 
 /// Delete artifact from API
 async fn delete_artifact_from_api(artifact_id: i32) -> AppResult<()> {
     let client = Client::new();
-    
+
     // Note: API endpoint not yet implemented
     log::info!("Delete artifact with ID: {}", artifact_id);
-    
+
     // Uncomment when DELETE endpoint is available:
     /*
     let response = client
@@ -967,24 +956,25 @@ async fn delete_artifact_from_api(artifact_id: i32) -> AppResult<()> {
         .send()
         .await
         .map_err(|e| AppError::Network(e.to_string()))?;
-    
+
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
         return Err(AppError::Api(error_text));
     }
     */
-    
+
     Ok(())
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 // Utility Functions
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------- 
 
 /// Convert API artifact to domain model
 fn convert_api_artifact_to_domain(api_artifact: ApiArtifact) -> Artifact {
     let description = api_artifact.description.clone().unwrap_or_default();
     let name = api_artifact.name.clone();
+
     Artifact {
         id: Some(api_artifact.id),
         name,
@@ -1002,13 +992,11 @@ fn convert_api_artifact_to_domain(api_artifact: ApiArtifact) -> Artifact {
     }
 }
 
-/// Extract era from artifact description
+/// Extract era from artifact description (fallback)
 fn extract_era_from_description(description: &str) -> String {
     let description_lower = description.to_lowercase();
-    
-    if description_lower.contains("ancient") 
-        || description_lower.contains("greek") 
-        || description_lower.contains("roman") {
+
+    if description_lower.contains("ancient") || description_lower.contains("greek") || description_lower.contains("roman") {
         "Ancient".to_string()
     } else if description_lower.contains("medieval") {
         "Medieval".to_string()
@@ -1026,12 +1014,20 @@ fn extract_era_from_api_artifact(artifact: &ApiArtifact) -> String {
     // Try to extract from tags first
     for tag in &artifact.tags {
         let tag_lower = tag.to_lowercase();
-        if tag_lower.contains("ancient") { return "Ancient".to_string(); }
-        if tag_lower.contains("medieval") { return "Medieval".to_string(); }
-        if tag_lower.contains("renaissance") { return "Renaissance".to_string(); }
-        if tag_lower.contains("modern") { return "Modern".to_string(); }
+        if tag_lower.contains("ancient") {
+            return "Ancient".to_string();
+        }
+        if tag_lower.contains("medieval") {
+            return "Medieval".to_string();
+        }
+        if tag_lower.contains("renaissance") {
+            return "Renaissance".to_string();
+        }
+        if tag_lower.contains("modern") {
+            return "Modern".to_string();
+        }
     }
-    
+
     // Fall back to description
     if let Some(description) = &artifact.description {
         extract_era_from_description(description)
@@ -1043,13 +1039,13 @@ fn extract_era_from_api_artifact(artifact: &ApiArtifact) -> String {
 /// Extract tags from analysis results
 fn extract_tags_from_analysis(analysis: &AnalyzeResponse) -> Vec<String> {
     let mut tags = Vec::new();
-    
+
     // Add era-based tag
-    let era = extract_era_from_description(&analysis.description);
+    let era = &analysis.era;
     if era != "Unknown" {
-        tags.push(era);
+        tags.push(era.clone());
     }
-    
+
     // Add confidence-based tag
     if analysis.confidence > 0.8 {
         tags.push("High Confidence".to_string());
@@ -1058,11 +1054,11 @@ fn extract_tags_from_analysis(analysis: &AnalyzeResponse) -> Vec<String> {
     } else {
         tags.push("Low Confidence".to_string());
     }
-    
+
     // Add method tag if available
     if let Some(method) = &analysis.method {
         tags.push(method.clone());
     }
-    
+
     tags
 }
