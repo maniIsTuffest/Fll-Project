@@ -164,15 +164,15 @@ fn rocket() -> Rocket<Build> {
     println!("   API Endpoints Available");
     println!("========================================");
     println!("\nHealth & Info:");
-    println!("  GET  http://localhost:8000/");
-    println!("  GET  http://localhost:8000/health");
+    println!("  GET  http://localhost:9000/");
+    println!("  GET  http://localhost:9000/health");
     println!("\nAuthentication:");
-    println!("  POST http://localhost:8000/login");
-    println!("  POST http://localhost:8000/search_user");
+    println!("  POST http://localhost:9000/login");
+    println!("  POST http://localhost:9000/search_user");
     println!("\nUser Info:");
-    println!("  POST http://localhost:8000/user/info");
+    println!("  POST http://localhost:9000/user/info");
     println!("\n========================================");
-    println!("   API Running on http://localhost:8000");
+    println!("   API Running on http://localhost:9000");
     println!("========================================\n");
 
     rocket::build()
@@ -184,3 +184,18 @@ fn rocket() -> Rocket<Build> {
             user_info,
         ])
 }
+#[launch]
+fn rocket() -> Rocket<Build> {
+    // ... (existing println! statements) ...
+
+    rocket::build()
+        .configure(rocket::Config::figment().merge(("port", 9000))) // <-- Add this line
+        .mount("/", routes![
+            index,
+            health,
+            login,
+            search_user,
+            user_info,
+        ])
+}
+
