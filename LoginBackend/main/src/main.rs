@@ -176,6 +176,7 @@ fn rocket() -> Rocket<Build> {
     println!("========================================\n");
 
     rocket::build()
+        .configure(rocket::Config::figment().merge(("port", 9000)))
         .mount("/", routes![
             index,
             health,
@@ -184,18 +185,3 @@ fn rocket() -> Rocket<Build> {
             user_info,
         ])
 }
-#[launch]
-fn rocket() -> Rocket<Build> {
-    // ... (existing println! statements) ...
-
-    rocket::build()
-        .configure(rocket::Config::figment().merge(("port", 9000))) // <-- Add this line
-        .mount("/", routes![
-            index,
-            health,
-            login,
-            search_user,
-            user_info,
-        ])
-}
-
