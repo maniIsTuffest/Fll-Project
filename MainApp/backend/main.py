@@ -379,3 +379,104 @@ async def update_artifact_verification(artifact_id: int, verification_status: st
 
 if __name__ == "__main__":
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+
+app = FastAPI()
+
+RUST_API = "http://localhost:9000"   # your Rust API base URL
+
+
+@app.get("/")
+async def root():
+    return {"python_api": "running", "connected_to": RUST_API}
+
+
+# -----------------------------
+# 🔐 Login (Python → Rust)
+# -----------------------------
+@app.post("/login")
+async def login(user: dict):
+    async with httpx.AsyncClient() as client:
+        res = await client.post(f"{RUST_API}/login", json=user)
+        return res.json()
+
+
+# -----------------------------
+# 🔍 Search User (Python → Rust)
+# -----------------------------
+@app.post("/search_user")
+async def search_user(user: dict):
+    async with httpx.AsyncClient() as client:
+        res = await client.post(f"{RUST_API}/search_user", json=user)
+        return res.json()
+
+
+# -----------------------------
+# 👤 User Info (Python → Rust)
+# -----------------------------
+@app.post("/user/info")
+async def user_info(user: dict):
+    async with httpx.AsyncClient() as client:
+        res = await client.post(f"{RUST_API}/user/info", json=user)
+        return res.json()
+
+
+# -----------------------------
+# 🩺 Health check (Python → Rust)
+# -----------------------------
+@app.get("/rust_health")
+async def rust_health():
+    async with httpx.AsyncClient() as client:
+        res = await client.get(f"{RUST_API}/health")
+        return res.json()
+
+        from fastapi import FastAPI
+import httpx
+
+app = FastAPI()
+
+RUST_API = "http://localhost:9000"   # your Rust API base URL
+
+
+@app.get("/")
+async def root():
+    return {"python_api": "running", "connected_to": RUST_API}
+
+
+# -----------------------------
+# 🔐 Login (Python → Rust)
+# -----------------------------
+@app.post("/login")
+async def login(user: dict):
+    async with httpx.AsyncClient() as client:
+        res = await client.post(f"{RUST_API}/login", json=user)
+        return res.json()
+
+
+# -----------------------------
+# 🔍 Search User (Python → Rust)
+# -----------------------------
+@app.post("/search_user")
+async def search_user(user: dict):
+    async with httpx.AsyncClient() as client:
+        res = await client.post(f"{RUST_API}/search_user", json=user)
+        return res.json()
+
+
+# -----------------------------
+# 👤 User Info (Python → Rust)
+# -----------------------------
+@app.post("/user/info")
+async def user_info(user: dict):
+    async with httpx.AsyncClient() as client:
+        res = await client.post(f"{RUST_API}/user/info", json=user)
+        return res.json()
+
+
+# -----------------------------
+# 🩺 Health check (Python → Rust)
+# -----------------------------
+@app.get("/rust_health")
+async def rust_health():
+    async with httpx.AsyncClient() as client:
+        res = await client.get(f"{RUST_API}/health")
+        return res.json()
