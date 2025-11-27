@@ -1,10 +1,8 @@
 import base64
 import logging
-import os
-import sys
-from typing import Any, Dict, List, Optional
-import requests
 from io import BytesIO
+
+import requests
 from PIL import Image, ImageOps
 
 # Configure logging
@@ -18,68 +16,68 @@ import io
 
 import streamlit as st
 
-import json
-
 # API configuration
-API_BASE_URL = "http://localhost:8000/api"
+API_BASE_URL = "http://localhost:8000"
+
 
 # API Client Functions
 def api_request(method, endpoint, data=None, params=None):
     """Generic API request helper"""
     url = f"{API_BASE_URL}/{endpoint}"
     headers = {"Content-Type": "application/json"}
-    
+
     try:
-        if method.upper() == 'GET':
+        if method.upper() == "GET":
             response = requests.get(url, params=params, headers=headers)
-        elif method.upper() == 'POST':
+        elif method.upper() == "POST":
             response = requests.post(url, json=data, headers=headers)
-        elif method.upper() == 'PUT':
+        elif method.upper() == "PUT":
             response = requests.put(url, json=data, headers=headers)
-        elif method.upper() == 'DELETE':
+        elif method.upper() == "DELETE":
             response = requests.delete(url, headers=headers)
         else:
             raise ValueError(f"Unsupported HTTP method: {method}")
-            
+
         response.raise_for_status()
         return response.json() if response.content else {}
     except requests.exceptions.RequestException as e:
         logger.error(f"API request failed: {str(e)}")
         raise
 
+
 def get_artifacts():
     """Get all artifacts"""
-    return api_request('GET', 'artifacts')
+    return api_request("GET", "api/artifacts")
+
 
 def search_artifacts(query):
     """Search artifacts by query"""
-    return api_request('GET', 'artifacts/search', params={"q": query})
+    return api_request("GET", "api/artifacts/search", params={"q": query})
+
 
 def get_artifact(artifact_id):
     """Get a single artifact by ID"""
-    return api_request('GET', f'artifacts/{artifact_id}')
+    return api_request("GET", f"api/artifacts/{artifact_id}")
+
 
 def create_artifact(name, description, tags, tier, image_data):
     """Create a new artifact"""
-    return api_request('POST', 'artifacts', {
-        'name': name,
-        'description': description,
-        'tags': tags,
-        'tier': tier,
-        'image_data': image_data
-    })
+    return api_request(
+        "POST",
+        "api/artifacts",
+        {
+            "name": name,
+            "description": description,
+            "tags": tags,
+            "tier": tier,
+            "image_data": image_data,
+        },
+    )
+
 
 def analyze_image(image_data, tier="fast"):
     """Analyze an image"""
-    return api_request('POST', 'analyze', {
-        'image_data': image_data,
-        'tier': tier
-    })
-
-# Import database functions
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-if PROJECT_DIR not in sys.path:
-    sys.path.insert(0, PROJECT_DIR)
+    return api_request("POST", "api/analyze", {"image_data": image_data, "tier": tier})
 
 
 def main():
@@ -121,10 +119,13 @@ def main():
 
     # Sync selected artifact from query params
     qp = get_query_params()
-    selected_from_qp = qp.get("artifact")
+    selected_from_qp: str = str(qp.get("artifact", ""))
     if selected_from_qp:
-        st.session_state["selected_artifact"] = int(selected_from_qp)
-        st.session_state["view_mode"] = "gallery"
+        try:
+            st.session_state["selected_artifact"] = int(selected_from_qp)
+            st.session_state["view_mode"] = "gallery"
+        except (ValueError, TypeError):
+            pass
 
     # Top toolbar
     tb1, tb2, tb3, tb4 = st.columns([0.5, 6, 0.3, 0.3])
@@ -138,11 +139,11 @@ def main():
             st.session_state["view_mode"] = "gallery"
             q = qp.get("q")
             set_qp(q=q)
-            #_safe_rerun()
+            # _safe_rerun()
     with tb2:
         search_val = qp.get("q", "")
         new_search = st.text_input(
-            "",
+            "Search",
             value=search_val,
             placeholder="Search by name, description, material, or tags",
             label_visibility="collapsed",
@@ -150,7 +151,7 @@ def main():
     with tb3:
         if st.button("🔎", use_container_width=True):
             set_qp(q=new_search or None)
-            #_safe_rerun()
+            # _safe_rerun()
     with tb4:
         if st.button("➕", use_container_width=True):
             if "selected_artifact" in st.session_state:
@@ -212,7 +213,7 @@ def identify_artifact_page():
 
         # Display the uploaded image
         col1, col2 = st.columns([1, 1])
-        
+
         # Convert image to base64
         buffered = BytesIO()
         image_input.save(buffered, format="PNG")
@@ -222,7 +223,7 @@ def identify_artifact_page():
         with col1:
             st.subheader("Uploaded Image")
             image = image_input
-            st.image(image, width='stretch')
+            st.image(image, width="stretch")
 
             # Optional cropping UI
             st.markdown("**Crop Options**")
@@ -264,41 +265,53 @@ def identify_artifact_page():
                 "Analysis Quality",
                 ["fast", "balanced", "thorough"],
                 index=0,
-                help="Faster analysis may be less accurate"
+                help="Faster analysis may be less accurate",
             )
-            
+
             if st.button("Analyze Artifact"):
                 with st.spinner("Analyzing artifact..."):
                     try:
                         # Call the analyze endpoint
                         analysis = analyze_image(img_data_url, tier=tier)
                         st.session_state["last_analysis"] = analysis
-                        
+
                         # Display results
                         st.success("Analysis complete!")
                         st.json(analysis)
-                        
+
                         # Show save form if analysis is successful
                         with st.form("save_artifact"):
                             st.subheader("Save to Archive")
-                            name = st.text_input("Artifact Name", value=analysis.get("name", ""))
-                            description = st.text_area("Description", value=analysis.get("description", ""))
-                            tags = st.text_input("Tags (comma separated)", 
-                                               value=",".join(analysis.get("tags", [])))
-                            
+                            name = st.text_input(
+                                "Artifact Name", value=analysis.get("name", "")
+                            )
+                            description = st.text_area(
+                                "Description", value=analysis.get("description", "")
+                            )
+                            tags = st.text_input(
+                                "Tags (comma separated)",
+                                value=",".join(analysis.get("tags", [])),
+                            )
+
                             if st.form_submit_button("Save Artifact"):
                                 try:
                                     result = create_artifact(
                                         name=name,
                                         description=description,
-                                        tags=[t.strip() for t in tags.split(",") if t.strip()],
+                                        tags=[
+                                            t.strip()
+                                            for t in tags.split(",")
+                                            if t.strip()
+                                        ],
                                         tier=tier,
-                                        image_data=img_data_url
+                                        image_data=img_data_url,
                                     )
-                                    st.success(f"Artifact saved with ID: {result.get('id')}")
+                                    st.success(
+                                        f"Artifact saved with ID: {result.get('id')}"
+                                    )
                                 except Exception as e:
                                     st.error(f"Failed to save artifact: {str(e)}")
-                        
+
                     except Exception as e:
                         st.error(f"Analysis failed: {str(e)}")
                         logger.exception("Analysis error")
@@ -327,17 +340,24 @@ def identify_artifact_page():
                         # Use cropped/selected image
                         image_to_save = st.session_state.get("last_image", image_to_use)
                         image_to_save.save(img_bytes, format="PNG")
-                        artifact_data = {
-                            "name": result.get("name", "Unknown"),
-                            "description": result.get("description", ""),
-                            "confidence": result.get("confidence", 0.0),
-                            "tags": [
-                                t.strip() for t in tags_input.split(",") if t.strip()
-                            ]
+                        tags_list = (
+                            [t.strip() for t in tags_input.split(",") if t.strip()]
                             if tags_input
-                            else None,
-                        }
-                        artifact_id = save_artifact(artifact_data, img_bytes.getvalue())
+                            else []
+                        )
+
+                        # Convert image to base64 for API
+                        img_b64 = base64.b64encode(img_bytes.getvalue()).decode()
+                        img_data_url = f"data:image/png;base64,{img_b64}"
+
+                        result_data = create_artifact(
+                            name=result.get("name", "Unknown"),
+                            description=result.get("description", ""),
+                            tags=tags_list,
+                            tier=tier,
+                            image_data=img_data_url,
+                        )
+                        artifact_id = result_data.get("id")
                         st.success(
                             f"✅ Artifact saved to archive with ID: {artifact_id}"
                         )
@@ -366,25 +386,32 @@ def _make_square_thumbnail_b64(img_b64: str, size: int = 300) -> str:
         return img_b64
 
 
-def get_query_params():
-    """Helper to get query parameters"""
+def get_query_params() -> dict[str, str]:
+    """Helper to get query parameters, always returns dict with string values"""
     try:
-        return dict(st.query_params)
+        params = dict(st.query_params)
     except Exception:
-        return {
-            k: v[0] if isinstance(v, list) and v else v
-            for k, v in st.experimental_get_query_params().items()
-        }
+        params = st.experimental_get_query_params()
+
+    # Normalize values: if it's a list, take first element; ensure strings have .strip() method
+    normalized: dict[str, str] = {}
+    for k, v in params.items():
+        if isinstance(v, list):
+            normalized[k] = v[0] if v else ""
+        else:
+            normalized[k] = str(v) if v is not None else ""
+    return normalized
+
 
 def archive_page():
     """Archive page to view saved artifacts."""
     st.header("Artifact Archive")
-    
+
     # Get query parameters first
     qp = get_query_params()
     search_query = qp.get("q", "").strip()
     artifact_qp = qp.get("artifact")
-    
+
     try:
         # Get all artifacts from the API
         if search_query:
@@ -392,36 +419,45 @@ def archive_page():
             artifacts = search_artifacts(search_query)
         else:
             artifacts = get_artifacts()
-        
+
         # Display artifacts in a grid
         if not artifacts:
             st.info("No artifacts found. Add some artifacts to get started!")
             return
-            
+
         # Group artifacts into rows of 3
         for i in range(0, len(artifacts), 3):
             cols = st.columns(3)
-            for j, artifact in enumerate(artifacts[i:i+3]):
+            for j, artifact in enumerate(artifacts[i : i + 3]):
                 with cols[j]:
-                    st.image(
-                        artifact.get("thumbnail") or artifact.get("image_data"),
-                        width='stretch',
-                        caption=artifact["name"]
+                    image_url = artifact.get("thumbnail") or artifact.get("image_data")
+                    if image_url:
+                        st.image(
+                            image_url,
+                            width="stretch",
+                            caption=artifact["name"],
+                        )
+                    else:
+                        st.warning(f"No image for {artifact['name']}")
+                    st.caption(
+                        artifact.get("description", "")[:100]
+                        + ("..." if len(artifact.get("description", "")) > 100 else "")
                     )
-                    st.caption(artifact.get("description", "")[:100] + ("..." if len(artifact.get("description", "")) > 100 else ""))
                     st.caption(f"Tags: {', '.join(artifact.get('tags', []))}")
                     if st.button("View Details", key=f"view_{artifact['id']}"):
                         st.session_state["selected_artifact"] = artifact["id"]
                         st.experimental_rerun()
-    
+
     except Exception as e:
         st.error(f"Failed to load artifacts: {str(e)}")
         logger.exception("Error in archive_page")
-    
+
     # Handle artifact selection from query params
     if artifact_qp and "selected_artifact" not in st.session_state:
         try:
-            artifact_qp_value = artifact_qp[0] if isinstance(artifact_qp, list) else artifact_qp
+            artifact_qp_value = (
+                artifact_qp[0] if isinstance(artifact_qp, list) else artifact_qp
+            )
             st.session_state["selected_artifact"] = int(artifact_qp_value)
         except (ValueError, TypeError):
             pass
@@ -440,11 +476,14 @@ def archive_page():
                         img_data = artifact.get("image_data")
                         if img_data and img_data.startswith("data:image"):
                             import re
+
                             # Extract base64 data from data URL
-                            base64_data = re.sub(r'^data:image/[^;]+;base64,', '', img_data)
+                            base64_data = re.sub(
+                                r"^data:image/[^;]+;base64,", "", img_data
+                            )
                             img_bytes = base64.b64decode(base64_data)
                             img = Image.open(io.BytesIO(img_bytes))
-                            st.image(img, width='stretch')
+                            st.image(img, width="stretch")
                 with right:
                     st.markdown(
                         f"**Description:** {artifact.get('description') or 'N/A'}"
@@ -460,21 +499,31 @@ def archive_page():
 def search_page():
     """Search page for finding artifacts."""
     st.header("Search Artifacts")
-    
+
     query = st.text_input("Search artifacts", placeholder="Enter search terms...")
-    
+
     if query:
         try:
             results = search_artifacts(query)
             if results:
                 st.success(f"Found {len(results)} artifacts")
                 for artifact in results:
-                    with st.expander(f"{artifact.get('name', 'Unknown')} (ID: {artifact.get('id')})"):
-                        st.image(
-                            artifact.get("thumbnail") or artifact.get("image_data"),
-                            width=200
+                    with st.expander(
+                        f"{artifact.get('name', 'Unknown')} (ID: {artifact.get('id')})"
+                    ):
+                        image_url = artifact.get("thumbnail") or artifact.get(
+                            "image_data"
                         )
-                        st.markdown(f"**Description:** {artifact.get('description', 'N/A')}")
+                        if image_url:
+                            st.image(
+                                image_url,
+                                width=200,
+                            )
+                        else:
+                            st.warning("No image available")
+                        st.markdown(
+                            f"**Description:** {artifact.get('description', 'N/A')}"
+                        )
                         st.markdown(f"**Tags:** {', '.join(artifact.get('tags', []))}")
             else:
                 st.info("No artifacts found matching your search.")
@@ -485,5 +534,6 @@ def search_page():
 if __name__ == "__main__":
     # Add a small delay to ensure backend is ready
     import time
+
     time.sleep(2)  # Wait 2 seconds for backend to start
     main()
