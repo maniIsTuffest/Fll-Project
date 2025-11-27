@@ -1,9 +1,0 @@
-sqlalchemy
-sqlalchemy-utils
-python-dotenv
-streamlit
-requests
-numpy
-pillow
-transformers
-torch

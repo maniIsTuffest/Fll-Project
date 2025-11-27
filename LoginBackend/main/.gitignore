@@ -1,0 +1,3 @@
+login.db
+# Ignore the target directory (typically for build artifacts)
+target/

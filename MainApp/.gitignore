@@ -1,0 +1,33 @@
+# Environment
+.env
+venv/
+env/
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+.vs/
+.streamlit/
+
+# Build artifacts
+dist/
+build/
+target/
+frontend/pkg/
+frontend/dist/
+
+# Database
+*.db
+*.sqlite
+
+# Dependencies
+node_modules/
+Cargo.lock
