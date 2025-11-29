@@ -80,14 +80,14 @@ def analyze_image(image_data, tier="fast"):
     return api_request("POST", "api/analyze", {"image_data": image_data, "tier": tier})
 
 
-def main():
+def main(role):
     """Main Streamlit application."""
-    st.set_page_config(
-        page_title="Archaeological Artifact Identifier",
-        page_icon="🏺",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
+#    st.set_page_config(
+#        page_title="Archaeological Artifact Identifier",
+#        page_icon="🏺",
+#        layout="centered",
+#        initial_sidebar_state="auto",
+#    )
 
     st.title("🏺 Artifact Gallery")
 
@@ -141,22 +141,34 @@ def main():
             set_qp(q=q)
             # _safe_rerun()
     with tb2:
-        search_val = qp.get("q", "")
-        new_search = st.text_input(
-            "Search",
-            value=search_val,
-            placeholder="Search by name, description, material, or tags",
-            label_visibility="collapsed",
-        )
+        if role == "admin" or role == "field" or role == "onsite":
+            search_val = qp.get("q", "")
+            new_search = st.text_input(
+                "Search",
+                value=search_val,
+                placeholder="Search by name, description, material, or tags",
+                label_visibility="collapsed",
+            )
+        elif role == "user":
+            search_val = qp.get("q", "")
+            new_search = st.text_input(
+                "Upload",
+                value=search_val,
+                placeholder="Upload Artifacts",
+                label_visibility="collapsed",
+            )
+
     with tb3:
-        if st.button("🔎", use_container_width=True):
-            set_qp(q=new_search or None)
-            # _safe_rerun()
+        if role == "admin" or role == "field" or role == "onsite":
+            if st.button("🔎", use_container_width=True):
+                set_qp(q=new_search or None)
+                # _safe_rerun()
     with tb4:
-        if st.button("➕", use_container_width=True):
-            if "selected_artifact" in st.session_state:
-                del st.session_state["selected_artifact"]
-            st.session_state["view_mode"] = "add"
+        if role == "admin" or role == "field" or role == "user":
+           if st.button("➕", use_container_width=True):
+                if "selected_artifact" in st.session_state:
+                    del st.session_state["selected_artifact"]
+                st.session_state["view_mode"] = "add"
     st.markdown(
         "<style>"
         'div[data-testid="stHorizontalBlock"] input {height:40px; margin-bottom:0;}'
@@ -169,7 +181,8 @@ def main():
     if st.session_state.get("view_mode") == "add":
         identify_artifact_page()
     else:
-        archive_page()
+        if not role == "user":
+            archive_page()
 
 
 def identify_artifact_page():
@@ -256,6 +269,20 @@ def identify_artifact_page():
                 image_to_use = cropped
             else:
                 image_to_use = image
+            
+            st.title("Quick Details Form")
+
+            with st.form("details_form"):
+
+                st.subheader("Enter Size Details")
+                length = st.number_input("Length (in cm)", min_value=0.0, step=0.1)
+                width = st.number_input("Width (in cm)", min_value=0.0, step=0.1)
+                thickness = st.number_input("Thickness (in cm)", min_value=0.0, step=0.1)
+
+                color = st.color_picker("Pick a Color", "#000000")
+                location = st.text_input("Enter Location")
+                description = st.text_area("Small Description")
+                submitted = st.form_submit_button("Submit")
 
         with col2:
             st.subheader("Analysis Results")
@@ -531,9 +558,9 @@ def search_page():
             st.error(f"Error during search: {str(e)}")
 
 
-if __name__ == "__main__":
+#if __name__ == "__main__":
     # Add a small delay to ensure backend is ready
-    import time
+#    import time
 
-    time.sleep(2)  # Wait 2 seconds for backend to start
-    main()
+#    time.sleep(2)  # Wait 2 seconds for backend to start
+#    main()
