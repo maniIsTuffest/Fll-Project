@@ -3,18 +3,12 @@ import logging
 from io import BytesIO
 
 import requests
-from PIL import Image, ImageOps
+import streamlit as st
+from PIL import Image
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-# ============================================================================
-# Streamlit UI + Dioxus UI Collab
-# ============================================================================
-
-import io
-
-import streamlit as st
 
 # API configuration
 API_BASE_URL = "http://localhost:8000"
@@ -25,6 +19,10 @@ def api_request(method, endpoint, data=None, params=None):
     """Generic API request helper"""
     url = f"{API_BASE_URL}/{endpoint}"
     headers = {"Content-Type": "application/json"}
+
+    # Debug logging
+    if data:
+        logger.info(f"API {method} {endpoint} with data: {data}")
 
     try:
         if method.upper() == "GET":
@@ -40,6 +38,14 @@ def api_request(method, endpoint, data=None, params=None):
 
         response.raise_for_status()
         return response.json() if response.content else {}
+    except requests.exceptions.HTTPError as e:
+        # Try to get error details from response
+        try:
+            error_detail = e.response.json().get("detail", str(e))
+        except:
+            error_detail = str(e)
+        logger.error(f"API request failed: {error_detail}")
+        raise Exception(f"API Error: {error_detail}")
     except requests.exceptions.RequestException as e:
         logger.error(f"API request failed: {str(e)}")
         raise
@@ -60,38 +66,37 @@ def get_artifact(artifact_id):
     return api_request("GET", f"api/artifacts/{artifact_id}")
 
 
-def create_artifact(name, description, tags, tier, image_data):
+def create_artifact(name, description, tags, tier, image_data, form_data=None):
     """Create a new artifact"""
-    return api_request(
-        "POST",
-        "api/artifacts",
-        {
-            "name": name,
-            "description": description,
-            "tags": tags,
-            "tier": tier,
-            "image_data": image_data,
-        },
-    )
+    payload = {
+        "name": name,
+        "description": description,
+        "tags": tags,
+        "tier": tier,
+        "image_data": image_data,
+    }
+    if form_data:
+        payload["form_data"] = form_data
+    return api_request("POST", "api/artifacts", data=payload)
 
 
 def analyze_image(image_data, tier="fast"):
-    """Analyze an image"""
-    return api_request("POST", "api/analyze", {"image_data": image_data, "tier": tier})
+    """Analyze an image using the AI analyzer"""
+    payload = {
+        "image_data": image_data,
+        "tier": tier,
+    }
+    return api_request("POST", "api/analyze", data=payload)
 
 
 def main(role):
     """Main Streamlit application."""
-#    st.set_page_config(
-#        page_title="Archaeological Artifact Identifier",
-#        page_icon="🏺",
-#        layout="centered",
-#        initial_sidebar_state="auto",
-#    )
-
     st.title("🏺 Artifact Gallery")
 
-    # Query params
+    # Store role in session state for access in other components
+    st.session_state["role"] = role
+
+    # Query params helper functions
     def get_query_params():
         """Helper function to get query params"""
         try:
@@ -113,13 +118,13 @@ def main(role):
                 **{k: v for k, v in kwargs.items() if v is not None}
             )
 
-    # Session defaults
+    # Session state defaults
     if "view_mode" not in st.session_state:
-        st.session_state["view_mode"] = "gallery"  # 'gallery' | 'add'
+        st.session_state["view_mode"] = "gallery"
 
     # Sync selected artifact from query params
     qp = get_query_params()
-    selected_from_qp: str = str(qp.get("artifact", ""))
+    selected_from_qp = str(qp.get("artifact", ""))
     if selected_from_qp:
         try:
             st.session_state["selected_artifact"] = int(selected_from_qp)
@@ -129,6 +134,7 @@ def main(role):
 
     # Top toolbar
     tb1, tb2, tb3, tb4 = st.columns([0.5, 6, 0.3, 0.3])
+
     with tb1:
         show_back = st.session_state.get("view_mode") == "add" or (
             "selected_artifact" in st.session_state
@@ -139,9 +145,10 @@ def main(role):
             st.session_state["view_mode"] = "gallery"
             q = qp.get("q")
             set_qp(q=q)
-            # _safe_rerun()
+            st.rerun()
+
     with tb2:
-        if role == "admin" or role == "field" or role == "onsite":
+        if role in ["admin", "field", "lab"]:
             search_val = qp.get("q", "")
             new_search = st.text_input(
                 "Search",
@@ -149,26 +156,23 @@ def main(role):
                 placeholder="Search by name, description, material, or tags",
                 label_visibility="collapsed",
             )
-        elif role == "user":
-            search_val = qp.get("q", "")
-            new_search = st.text_input(
-                "Upload",
-                value=search_val,
-                placeholder="Upload Artifacts",
-                label_visibility="collapsed",
-            )
+        else:
+            new_search = ""
 
     with tb3:
-        if role == "admin" or role == "field" or role == "onsite":
+        if role in ["admin", "field", "lab"]:
             if st.button("🔎", use_container_width=True):
                 set_qp(q=new_search or None)
-                # _safe_rerun()
+                st.rerun()
+
     with tb4:
-        if role == "admin" or role == "field" or role == "user":
-           if st.button("➕", use_container_width=True):
+        if role in ["admin", "field", "user"]:
+            if st.button("➕", use_container_width=True):
                 if "selected_artifact" in st.session_state:
                     del st.session_state["selected_artifact"]
                 st.session_state["view_mode"] = "add"
+                st.rerun()
+
     st.markdown(
         "<style>"
         'div[data-testid="stHorizontalBlock"] input {height:40px; margin-bottom:0;}'
@@ -181,18 +185,21 @@ def main(role):
     if st.session_state.get("view_mode") == "add":
         identify_artifact_page()
     else:
-        if not role == "user":
+        if role != "user":
             archive_page()
+        else:
+            st.info("Upload artifacts or browse the gallery from the menu.")
 
 
 def identify_artifact_page():
-    """Single artifact identification page."""
-    st.header("Identify Single Artifact")
+    """Single artifact identification page with form data capture."""
+    st.header("📤 Upload & Identify Artifact")
 
     # Choose source: Upload or Camera
     source = st.radio("Image source", ["Upload", "Camera"], horizontal=True)
     uploaded_file = None
     camera_photo = None
+
     if source == "Upload":
         uploaded_file = st.file_uploader(
             "Upload an artifact image",
@@ -201,7 +208,7 @@ def identify_artifact_page():
         )
     else:
         camera_photo = st.camera_input(
-            "Take a picture (Identify page)", key="identify_camera"
+            "Take a picture of the artifact", key="identify_camera"
         )
 
     # Resolve to a PIL image if provided
@@ -221,28 +228,24 @@ def identify_artifact_page():
             st.session_state["last_uploaded_file"] = file_key
             if "last_analysis" in st.session_state:
                 del st.session_state["last_analysis"]
-            if "last_image" in st.session_state:
-                del st.session_state["last_image"]
+            if "last_form_data" in st.session_state:
+                del st.session_state["last_form_data"]
 
-        # Display the uploaded image
+        # Create two columns: Image & Form on left, Analysis on right
         col1, col2 = st.columns([1, 1])
 
-        # Convert image to base64
-        buffered = BytesIO()
-        image_input.save(buffered, format="PNG")
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        img_data_url = f"data:image/png;base64,{img_str}"
-
+        # LEFT COLUMN: Image and Form Data
         with col1:
-            st.subheader("Uploaded Image")
-            image = image_input
-            st.image(image, width="stretch")
+            st.subheader("📷 Artifact Image")
+            st.image(image_input, use_container_width=True)
 
-            # Optional cropping UI
+            # Cropping UI
             st.markdown("**Crop Options**")
             enable_crop = st.checkbox("Crop image", value=False)
+            image_to_use = image_input
+
             if enable_crop:
-                w, h = image.size
+                w, h = image_input.size
                 colc1, colc2 = st.columns(2)
                 with colc1:
                     left_pct = st.slider("Left %", 0, 99, 0)
@@ -262,166 +265,247 @@ def identify_artifact_page():
                     bottom = top + 1 if top < h else h
 
                 try:
-                    cropped = image.crop((left, top, right, bottom))
-                except Exception:
-                    cropped = image
-                st.image(cropped, caption="Cropped Preview", use_container_width=True)
-                image_to_use = cropped
-            else:
-                image_to_use = image
-            
-            st.title("Quick Details Form")
+                    image_to_use = image_input.crop((left, top, right, bottom))
+                    st.image(
+                        image_to_use,
+                        caption="Cropped Preview",
+                        use_container_width=True,
+                    )
+                except Exception as e:
+                    st.warning(f"Crop failed: {str(e)}")
+                    image_to_use = image_input
 
-            with st.form("details_form"):
+            # Form for capturing artifact details
+            st.markdown("**📋 Artifact Details**")
+            with st.form("artifact_details_form"):
+                st.subheader("Physical Measurements")
+                col_a, col_b, col_c = st.columns(3)
 
-                st.subheader("Enter Size Details")
-                length = st.number_input("Length (in cm)", min_value=0.0, step=0.1)
-                width = st.number_input("Width (in cm)", min_value=0.0, step=0.1)
-                thickness = st.number_input("Thickness (in cm)", min_value=0.0, step=0.1)
+                with col_a:
+                    length = st.number_input(
+                        "Length (cm)", min_value=0.0, step=0.1, value=0.0
+                    )
 
-                color = st.color_picker("Pick a Color", "#000000")
-                location = st.text_input("Enter Location")
-                description = st.text_area("Small Description")
-                submitted = st.form_submit_button("Submit")
+                with col_b:
+                    width = st.number_input(
+                        "Width (cm)", min_value=0.0, step=0.1, value=0.0
+                    )
 
+                with col_c:
+                    thickness = st.number_input(
+                        "Thickness (cm)", min_value=0.0, step=0.1, value=0.0
+                    )
+
+                color = st.color_picker("Artifact Color", "#808080")
+                location = st.text_input(
+                    "Discovery Location", placeholder="e.g., Site A, Grid 5"
+                )
+                description = st.text_area(
+                    "Physical Description",
+                    placeholder="Describe the artifact's appearance, condition, material, etc.",
+                )
+
+                artifact_name = st.text_input(
+                    "Artifact Name (Optional)",
+                    placeholder="e.g., Pottery Fragment, Bronze Tool",
+                )
+                tags = st.text_input(
+                    "Tags (comma-separated)",
+                    placeholder="e.g., pottery, bronze, burial, broken",
+                )
+
+                submitted = st.form_submit_button(
+                    "💾 Save Form Data", use_container_width=True
+                )
+
+            if submitted:
+                # Validate form data
+                if length == 0.0 and width == 0.0 and thickness == 0.0:
+                    st.warning("⚠️ Please enter at least one measurement")
+                elif not location.strip():
+                    st.warning("⚠️ Please enter a discovery location")
+                elif not description.strip():
+                    st.warning("⚠️ Please provide a physical description")
+                else:
+                    # Store form data in session state
+                    form_data = {
+                        "length": float(length),
+                        "width": float(width),
+                        "thickness": float(thickness),
+                        "color": color,
+                        "location": location.strip(),
+                        "description": description.strip(),
+                        "artifact_name": artifact_name.strip()
+                        if artifact_name
+                        else None,
+                        "tags": [t.strip() for t in tags.split(",") if t.strip()]
+                        if tags
+                        else [],
+                    }
+                    st.session_state["last_form_data"] = form_data
+                    st.success("✅ Form data saved! You can now analyze the artifact.")
+
+        # RIGHT COLUMN: Analysis Controls and Results
         with col2:
-            st.subheader("Analysis Results")
+            st.subheader("🤖 AI Analysis")
+
+            # Check if form data is saved
+            form_saved = "last_form_data" in st.session_state
+
+            if not form_saved:
+                st.info("💡 Complete the form on the left before analyzing")
 
             # Speed tier selection
             tier = st.selectbox(
                 "Analysis Quality",
                 ["fast", "balanced", "thorough"],
                 index=0,
-                help="Faster analysis may be less accurate",
+                help="Fast: ~20-40s | Balanced: ~30-60s | Thorough: ~1-2 min",
             )
 
-            if st.button("Analyze Artifact"):
-                with st.spinner("Analyzing artifact..."):
+            # Analyze button
+            if st.button(
+                "🔍 Analyze Artifact", disabled=not form_saved, use_container_width=True
+            ):
+                with st.spinner("🔄 Analyzing artifact with AI..."):
                     try:
-                        # Call the analyze endpoint
+                        # Convert image to base64
+                        buffered = BytesIO()
+                        image_to_use.save(buffered, format="PNG")
+                        img_str = base64.b64encode(buffered.getvalue()).decode()
+                        img_data_url = f"data:image/png;base64,{img_str}"
+
+                        # Call analyze endpoint
                         analysis = analyze_image(img_data_url, tier=tier)
                         st.session_state["last_analysis"] = analysis
-
-                        # Display results
-                        st.success("Analysis complete!")
-                        st.json(analysis)
-
-                        # Show save form if analysis is successful
-                        with st.form("save_artifact"):
-                            st.subheader("Save to Archive")
-                            name = st.text_input(
-                                "Artifact Name", value=analysis.get("name", "")
-                            )
-                            description = st.text_area(
-                                "Description", value=analysis.get("description", "")
-                            )
-                            tags = st.text_input(
-                                "Tags (comma separated)",
-                                value=",".join(analysis.get("tags", [])),
-                            )
-
-                            if st.form_submit_button("Save Artifact"):
-                                try:
-                                    result = create_artifact(
-                                        name=name,
-                                        description=description,
-                                        tags=[
-                                            t.strip()
-                                            for t in tags.split(",")
-                                            if t.strip()
-                                        ],
-                                        tier=tier,
-                                        image_data=img_data_url,
-                                    )
-                                    st.success(
-                                        f"Artifact saved with ID: {result.get('id')}"
-                                    )
-                                except Exception as e:
-                                    st.error(f"Failed to save artifact: {str(e)}")
+                        st.session_state["last_image"] = image_to_use
+                        st.success("✅ Analysis complete!")
+                        st.rerun()
 
                     except Exception as e:
-                        st.error(f"Analysis failed: {str(e)}")
+                        st.error(f"❌ Analysis failed: {str(e)}")
                         logger.exception("Analysis error")
 
-            # Display results if available (persists across reruns)
-            if "last_analysis" in st.session_state and "last_image" in st.session_state:
+            # Display analysis results if available
+            if "last_analysis" in st.session_state:
                 result = st.session_state["last_analysis"]
-                image = st.session_state["last_image"]
+                st.markdown("---")
+                st.markdown("**Analysis Results:**")
 
-                st.success(
-                    f"✅ Analysis Complete in {result.get('analysis_time', 'N/A')}!"
-                )
+                col_res1, col_res2 = st.columns(2)
+                with col_res1:
+                    st.metric(
+                        "Confidence", f"{float(result.get('confidence', 0)) * 100:.1f}%"
+                    )
+                    st.metric("Tier", result.get("tier", "N/A").title())
+
+                with col_res2:
+                    st.metric("Method", result.get("method", "N/A"))
+                    st.metric("Time", result.get("analysis_time", "N/A"))
+
                 st.markdown(f"**Name:** {result.get('name', 'Unknown')}")
-                st.markdown(f"**Description:** {result.get('description', 'N/A')}")
-                st.markdown(f"**Confidence:** {result.get('confidence', 0):.2%}")
-                st.markdown(f"**Method:** {result.get('method', 'N/A')}")
-                st.markdown(f"**Quality Tier:** {result.get('tier', 'N/A')}")
-
-                # Option to save to archive (now outside the analyze button block)
-                tags_input = st.text_input(
-                    "Tags (comma-separated)", placeholder="e.g. pottery, bronze, burial"
+                st.markdown(
+                    f"**Description:** {result.get('description', 'No description')}"
                 )
-                if st.button("Save to Archive"):
-                    try:
-                        img_bytes = io.BytesIO()
-                        # Use cropped/selected image
-                        image_to_save = st.session_state.get("last_image", image_to_use)
-                        image_to_save.save(img_bytes, format="PNG")
-                        tags_list = (
-                            [t.strip() for t in tags_input.split(",") if t.strip()]
-                            if tags_input
-                            else []
-                        )
 
-                        # Convert image to base64 for API
-                        img_b64 = base64.b64encode(img_bytes.getvalue()).decode()
-                        img_data_url = f"data:image/png;base64,{img_b64}"
+                # Save to archive section
+                st.markdown("---")
+                st.markdown("**📦 Save to Archive**")
 
-                        result_data = create_artifact(
-                            name=result.get("name", "Unknown"),
-                            description=result.get("description", ""),
-                            tags=tags_list,
-                            tier=tier,
-                            image_data=img_data_url,
-                        )
-                        artifact_id = result_data.get("id")
-                        st.success(
-                            f"✅ Artifact saved to archive with ID: {artifact_id}"
-                        )
-                        st.balloons()
-                    except Exception as e:
-                        st.error(f"Error saving artifact: {str(e)}")
-                        st.exception(e)
+                with st.form("save_to_archive_form"):
+                    final_name = st.text_input(
+                        "Artifact Name", value=result.get("name", "Unknown")
+                    )
+                    final_description = st.text_area(
+                        "Description", value=result.get("description", ""), height=100
+                    )
+                    final_tags = st.text_input(
+                        "Tags (comma-separated)", value=",".join(result.get("tags", []))
+                    )
+
+                    if st.form_submit_button(
+                        "✅ Save to Archive", use_container_width=True
+                    ):
+                        try:
+                            # Get the last form data
+                            form_data = st.session_state.get("last_form_data", {})
+
+                            # Prepare image data
+                            buffered = BytesIO()
+                            st.session_state["last_image"].save(buffered, format="PNG")
+                            img_str = base64.b64encode(buffered.getvalue()).decode()
+                            img_data_url = f"data:image/png;base64,{img_str}"
+
+                            # Prepare tags
+                            tag_list = [
+                                t.strip() for t in final_tags.split(",") if t.strip()
+                            ]
+
+                            # Create artifact with form data attached
+                            result_data = create_artifact(
+                                name=final_name,
+                                description=final_description,
+                                tags=tag_list,
+                                tier=tier,
+                                image_data=img_data_url,
+                                form_data=form_data,
+                            )
+
+                            artifact_id = result_data.get("id")
+                            st.success(f"✅ Artifact saved! ID: {artifact_id}")
+                            st.balloons()
+
+                            # Clear session state
+                            if "last_analysis" in st.session_state:
+                                del st.session_state["last_analysis"]
+                            if "last_form_data" in st.session_state:
+                                del st.session_state["last_form_data"]
+                            if "last_image" in st.session_state:
+                                del st.session_state["last_image"]
+
+                            st.rerun()
+
+                        except Exception as e:
+                            st.error(f"❌ Failed to save artifact: {str(e)}")
+                            logger.exception("Save artifact error")
 
 
-def _make_square_thumbnail_b64(img_b64: str, size: int = 300) -> str:
-    """Create a square thumbnail from a base64 image string and return base64 PNG."""
+def _make_square_thumbnail_b64(image_b64: str, size: int = 200) -> str:
+    """Convert a base64 image to a square thumbnail."""
     try:
-        img_data = base64.b64decode(img_b64)
-        with Image.open(io.BytesIO(img_data)) as im:
-            im = im.convert("RGBA")
-            # Fit into square with padding
-            thumb = ImageOps.contain(im, (size, size))
-            canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
-            x = (size - thumb.width) // 2
-            y = (size - thumb.height) // 2
-            canvas.paste(thumb, (x, y))
-            out = io.BytesIO()
-            canvas.save(out, format="PNG")
-            return base64.b64encode(out.getvalue()).decode("utf-8")
-    except Exception:
-        return img_b64
+        if image_b64.startswith("data:image"):
+            image_b64 = image_b64.split(",", 1)[1]
+
+        image_bytes = base64.b64decode(image_b64)
+        image = Image.open(BytesIO(image_bytes))
+
+        # Make square
+        side = min(image.size)
+        left = (image.width - side) / 2
+        top = (image.height - side) / 2
+        image = image.crop((left, top, left + side, top + side))
+
+        # Resize
+        image.thumbnail((size, size))
+
+        # Convert back to base64
+        buffered = BytesIO()
+        image.save(buffered, format="PNG")
+        return base64.b64encode(buffered.getvalue()).decode()
+    except Exception as e:
+        logger.error(f"Thumbnail creation failed: {str(e)}")
+        return image_b64
 
 
-def get_query_params() -> dict[str, str]:
-    """Helper to get query parameters, always returns dict with string values"""
+def get_query_params():
+    """Helper function to get query params - always returns dict with string values"""
     try:
         params = dict(st.query_params)
     except Exception:
         params = st.experimental_get_query_params()
 
-    # Normalize values: if it's a list, take first element; ensure strings have .strip() method
-    normalized: dict[str, str] = {}
+    # Normalize all values to strings
+    normalized = {}
     for k, v in params.items():
         if isinstance(v, list):
             normalized[k] = v[0] if v else ""
@@ -431,136 +515,526 @@ def get_query_params() -> dict[str, str]:
 
 
 def archive_page():
-    """Archive page to view saved artifacts."""
-    st.header("Artifact Archive")
+    """Archive page to view saved artifacts in a gallery."""
+    st.header("🏛️ Artifact Archive")
 
-    # Get query parameters first
+    # Get query parameters
     qp = get_query_params()
     search_query = qp.get("q", "").strip()
-    artifact_qp = qp.get("artifact")
 
     try:
-        # Get all artifacts from the API
+        # Fetch artifacts
         if search_query:
-            st.subheader(f"Search Results for: {search_query}")
+            st.subheader(f"Search Results: {search_query}")
             artifacts = search_artifacts(search_query)
         else:
             artifacts = get_artifacts()
 
-        # Display artifacts in a grid
         if not artifacts:
-            st.info("No artifacts found. Add some artifacts to get started!")
+            st.info("📭 No artifacts found. Start by uploading one!")
             return
 
-        # Group artifacts into rows of 3
+        # Display gallery statistics
+        col_stats1, col_stats2 = st.columns(2)
+        with col_stats1:
+            st.metric("Total Artifacts", len(artifacts))
+        with col_stats2:
+            st.metric("Search Results", len(artifacts) if search_query else "All")
+
+        # Display artifacts in a grid (3 columns) - names only
+        st.markdown("---")
         for i in range(0, len(artifacts), 3):
-            cols = st.columns(3)
+            cols = st.columns(3, gap="medium")
+
             for j, artifact in enumerate(artifacts[i : i + 3]):
                 with cols[j]:
+                    # Display image
                     image_url = artifact.get("thumbnail") or artifact.get("image_data")
                     if image_url:
                         st.image(
                             image_url,
-                            width="stretch",
-                            caption=artifact["name"],
+                            use_container_width=True,
                         )
                     else:
-                        st.warning(f"No image for {artifact['name']}")
-                    st.caption(
-                        artifact.get("description", "")[:100]
-                        + ("..." if len(artifact.get("description", "")) > 100 else "")
-                    )
-                    st.caption(f"Tags: {', '.join(artifact.get('tags', []))}")
-                    if st.button("View Details", key=f"view_{artifact['id']}"):
-                        st.session_state["selected_artifact"] = artifact["id"]
-                        st.experimental_rerun()
+                        st.warning("No image")
+
+                    # Display only artifact name
+                    st.markdown(f"### {artifact.get('name', 'Unknown')}")
+
+                    # View details button - opens popup
+                    if st.button(
+                        "👁️ View Details",
+                        key=f"view_{artifact['id']}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["popup_artifact_id"] = artifact["id"]
+
+        st.markdown("---")
 
     except Exception as e:
-        st.error(f"Failed to load artifacts: {str(e)}")
+        st.error(f"❌ Failed to load artifacts: {str(e)}")
         logger.exception("Error in archive_page")
 
-    # Handle artifact selection from query params
-    if artifact_qp and "selected_artifact" not in st.session_state:
-        try:
-            artifact_qp_value = (
-                artifact_qp[0] if isinstance(artifact_qp, list) else artifact_qp
-            )
-            st.session_state["selected_artifact"] = int(artifact_qp_value)
-        except (ValueError, TypeError):
-            pass
+    # Handle popup display
+    if "popup_artifact_id" in st.session_state:
+        artifact_id = st.session_state["popup_artifact_id"]
 
-    # If an artifact is selected, show only its detail page
-    if "selected_artifact" in st.session_state:
-        artifact_id = st.session_state["selected_artifact"]
+        # Initialize edit mode state
+        if f"edit_mode_{artifact_id}" not in st.session_state:
+            st.session_state[f"edit_mode_{artifact_id}"] = False
+
         try:
             artifact = get_artifact(artifact_id)
             if artifact:
-                st.subheader(artifact.get("name", "Artifact"))
-                left, right = st.columns([1, 2])
-                with left:
-                    if artifact.get("image_data"):
-                        # Handle base64 image data
-                        img_data = artifact.get("image_data")
-                        if img_data and img_data.startswith("data:image"):
-                            import re
+                # Display popup modal
+                with st.container(border=True):
+                    popup_col1, popup_col2, popup_col3 = st.columns([0.8, 0.1, 0.1])
 
-                            # Extract base64 data from data URL
-                            base64_data = re.sub(
-                                r"^data:image/[^;]+;base64,", "", img_data
+                    # Edit button
+                    with popup_col2:
+                        if st.session_state.get("role") in ["admin", "lab", "onsite"]:
+                            if st.button(
+                                "✏️"
+                                if not st.session_state[f"edit_mode_{artifact_id}"]
+                                else "💾",
+                                key=f"edit_{artifact_id}",
+                                help="Edit"
+                                if not st.session_state[f"edit_mode_{artifact_id}"]
+                                else "Save",
+                            ):
+                                if st.session_state[f"edit_mode_{artifact_id}"]:
+                                    # Save changes
+                                    updated_data = {}
+
+                                    # Only add fields that have values
+                                    name_val = st.session_state.get(
+                                        f"edit_name_{artifact_id}"
+                                    )
+                                    if name_val:
+                                        updated_data["name"] = name_val
+
+                                    desc_val = st.session_state.get(
+                                        f"edit_desc_{artifact_id}"
+                                    )
+                                    if desc_val is not None:  # Allow empty string
+                                        updated_data["description"] = desc_val
+
+                                    tags_val = st.session_state.get(
+                                        f"edit_tags_{artifact_id}"
+                                    )
+                                    if tags_val is not None:  # Allow empty string
+                                        updated_data["tags"] = tags_val
+
+                                    # Get form data updates
+                                    form_updates = {}
+
+                                    # Only add form fields that exist in session state
+                                    if f"edit_length_{artifact_id}" in st.session_state:
+                                        val = st.session_state[
+                                            f"edit_length_{artifact_id}"
+                                        ]
+                                        if val and val > 0:
+                                            form_updates["length"] = val
+
+                                    if f"edit_width_{artifact_id}" in st.session_state:
+                                        val = st.session_state[
+                                            f"edit_width_{artifact_id}"
+                                        ]
+                                        if val and val > 0:
+                                            form_updates["width"] = val
+
+                                    if (
+                                        f"edit_thickness_{artifact_id}"
+                                        in st.session_state
+                                    ):
+                                        val = st.session_state[
+                                            f"edit_thickness_{artifact_id}"
+                                        ]
+                                        if val and val > 0:
+                                            form_updates["thickness"] = val
+
+                                    if f"edit_weight_{artifact_id}" in st.session_state:
+                                        val = st.session_state[
+                                            f"edit_weight_{artifact_id}"
+                                        ]
+                                        if val and val > 0:
+                                            form_updates["weight"] = val
+
+                                    if f"edit_color_{artifact_id}" in st.session_state:
+                                        val = st.session_state[
+                                            f"edit_color_{artifact_id}"
+                                        ]
+                                        if val:
+                                            form_updates["color"] = val
+
+                                    if (
+                                        f"edit_location_{artifact_id}"
+                                        in st.session_state
+                                    ):
+                                        val = st.session_state[
+                                            f"edit_location_{artifact_id}"
+                                        ]
+                                        if val:
+                                            form_updates["location"] = val
+
+                                    if (
+                                        f"edit_phys_desc_{artifact_id}"
+                                        in st.session_state
+                                    ):
+                                        val = st.session_state[
+                                            f"edit_phys_desc_{artifact_id}"
+                                        ]
+                                        if val:
+                                            form_updates["description"] = val
+
+                                    if (
+                                        f"edit_artifact_name_{artifact_id}"
+                                        in st.session_state
+                                    ):
+                                        val = st.session_state[
+                                            f"edit_artifact_name_{artifact_id}"
+                                        ]
+                                        if val:
+                                            form_updates["artifact_name"] = val
+
+                                    if form_updates:
+                                        updated_data["form_data"] = form_updates
+
+                                    if updated_data:
+                                        try:
+                                            logger.info(
+                                                f"Saving artifact {artifact_id} with data: {updated_data}"
+                                            )
+                                            logger.info(
+                                                f"Session state keys: {[k for k in st.session_state.keys() if str(artifact_id) in k]}"
+                                            )
+                                            response = api_request(
+                                                "PUT",
+                                                f"api/artifacts/{artifact_id}",
+                                                data=updated_data,
+                                            )
+                                            logger.info(f"API response: {response}")
+                                            st.success("✅ Changes saved!")
+                                            st.session_state[
+                                                f"edit_mode_{artifact_id}"
+                                            ] = False
+                                            st.rerun()
+                                        except Exception as e:
+                                            error_msg = str(e)
+                                            logger.error(
+                                                f"Failed to save artifact: {error_msg}"
+                                            )
+                                            logger.error(
+                                                f"Update data was: {updated_data}"
+                                            )
+                                            st.error(f"Failed to save: {error_msg}")
+                                    else:
+                                        st.warning("No changes to save")
+                                else:
+                                    # Enter edit mode
+                                    st.session_state[f"edit_mode_{artifact_id}"] = True
+                                    st.rerun()
+
+                    # Close button
+                    with popup_col3:
+                        if st.button("✕", key=f"close_{artifact_id}"):
+                            del st.session_state["popup_artifact_id"]
+                            if f"edit_mode_{artifact_id}" in st.session_state:
+                                del st.session_state[f"edit_mode_{artifact_id}"]
+                            st.rerun()
+
+                    with popup_col1:
+                        if st.session_state[f"edit_mode_{artifact_id}"]:
+                            # Edit mode - show input field
+                            edited_name = st.text_input(
+                                "Name",
+                                value=artifact.get("name", "Unknown"),
+                                key=f"edit_name_{artifact_id}",
                             )
-                            img_bytes = base64.b64decode(base64_data)
-                            img = Image.open(io.BytesIO(img_bytes))
-                            st.image(img, width="stretch")
-                with right:
-                    st.markdown(
-                        f"**Description:** {artifact.get('description') or 'N/A'}"
-                    )
-                    st.markdown(f"**Tags:** {', '.join(artifact.get('tags', []))}")
-                    st.markdown(f"**Tier:** {artifact.get('tier', 'N/A')}")
-                    st.markdown(f"**ID:** {artifact.get('id', 'N/A')}")
+                        else:
+                            st.markdown(f"## {artifact.get('name', 'Unknown')}")
+
+                    # Create two columns for layout in popup
+                    detail_left, detail_right = st.columns([1, 2])
+
+                    # Left: Image
+                    with detail_left:
+                        image_url = artifact.get("image_data") or artifact.get(
+                            "thumbnail"
+                        )
+                        if image_url:
+                            st.image(image_url, use_container_width=True)
+                        else:
+                            st.warning("No image available")
+
+                    # Right: Details
+                    with detail_right:
+                        edit_mode = st.session_state[f"edit_mode_{artifact_id}"]
+
+                        # Core information
+                        st.markdown("**Basic Information:**")
+                        st.write(f"- **ID:** {artifact.get('id')}")
+                        st.write(f"- **Tier:** {artifact.get('tier', 'N/A')}")
+                        st.write(
+                            f"- **Uploaded:** {artifact.get('uploaded_at', 'N/A')}"
+                        )
+
+                        # Description
+                        desc = artifact.get("description", "")
+                        if edit_mode:
+                            st.markdown("**Description:**")
+                            edited_desc = st.text_area(
+                                "",
+                                value=desc,
+                                height=100,
+                                key=f"edit_desc_{artifact_id}",
+                                label_visibility="collapsed",
+                            )
+                        elif desc:
+                            st.markdown("**Description:**")
+                            st.write(desc)
+
+                        # Tags
+                        tags = artifact.get("tags", [])
+                        if isinstance(tags, str):
+                            tags = [t.strip() for t in tags.split(",")]
+
+                        if edit_mode:
+                            st.markdown("**Tags:**")
+                            tags_str = ", ".join(tags) if tags else ""
+                            edited_tags = st.text_input(
+                                "",
+                                value=tags_str,
+                                key=f"edit_tags_{artifact_id}",
+                                label_visibility="collapsed",
+                                placeholder="Enter comma-separated tags",
+                            )
+                        elif tags:
+                            st.markdown("**Tags:**")
+                            for tag in tags:
+                                st.write(f"🏷️ {tag}")
+
+                        # Verification status
+                        status = artifact.get("verification_status", "pending")
+                        if status == "verified":
+                            st.success(f"✅ Verified")
+                        elif status == "rejected":
+                            st.error("❌ Rejected")
+                        else:
+                            st.info("⏳ Pending verification")
+
+                    # Form data if available - full width
+                    form_data = artifact.get("form_data")
+                    if form_data:
+                        st.markdown("---")
+                        st.markdown("**📐 Physical Measurements & Details**")
+
+                        # Parse form data if it's a JSON string
+                        if isinstance(form_data, str):
+                            import json
+
+                            try:
+                                form_data = json.loads(form_data)
+                            except (json.JSONDecodeError, TypeError):
+                                form_data = {}
+
+                        if isinstance(form_data, dict):
+                            edit_mode = st.session_state[f"edit_mode_{artifact_id}"]
+
+                            # Display measurements in columns
+                            meas_col1, meas_col2, meas_col3 = st.columns(3)
+
+                            with meas_col1:
+                                if edit_mode:
+                                    st.number_input(
+                                        "Length (cm)",
+                                        value=float(form_data.get("length", 0) or 0),
+                                        key=f"edit_length_{artifact_id}",
+                                        min_value=0.0,
+                                        step=0.1,
+                                    )
+                                    st.number_input(
+                                        "Width (cm)",
+                                        value=float(form_data.get("width", 0) or 0),
+                                        key=f"edit_width_{artifact_id}",
+                                        min_value=0.0,
+                                        step=0.1,
+                                    )
+                                else:
+                                    if form_data.get("length"):
+                                        st.metric("Length", f"{form_data['length']} cm")
+                                    if form_data.get("width"):
+                                        st.metric("Width", f"{form_data['width']} cm")
+
+                            with meas_col2:
+                                if edit_mode:
+                                    st.number_input(
+                                        "Thickness (cm)",
+                                        value=float(form_data.get("thickness", 0) or 0),
+                                        key=f"edit_thickness_{artifact_id}",
+                                        min_value=0.0,
+                                        step=0.1,
+                                    )
+                                    st.number_input(
+                                        "Weight (g)",
+                                        value=float(form_data.get("weight", 0) or 0),
+                                        key=f"edit_weight_{artifact_id}",
+                                        min_value=0.0,
+                                        step=0.1,
+                                    )
+                                else:
+                                    if form_data.get("thickness"):
+                                        st.metric(
+                                            "Thickness", f"{form_data['thickness']} cm"
+                                        )
+                                    if form_data.get("weight"):
+                                        st.metric("Weight", f"{form_data['weight']} g")
+
+                            with meas_col3:
+                                if edit_mode:
+                                    st.text_input(
+                                        "Color",
+                                        value=form_data.get("color", ""),
+                                        key=f"edit_color_{artifact_id}",
+                                    )
+                                    st.text_input(
+                                        "Location",
+                                        value=form_data.get("location", ""),
+                                        key=f"edit_location_{artifact_id}",
+                                    )
+                                else:
+                                    if form_data.get("color"):
+                                        st.write("**Color:** ", form_data["color"])
+                                    if form_data.get("location"):
+                                        st.write(
+                                            f"**Location:** {form_data['location']}"
+                                        )
+
+                            # Display description if available
+                            if edit_mode:
+                                st.markdown("**Physical Description:**")
+                                st.text_area(
+                                    "",
+                                    value=form_data.get("description", ""),
+                                    key=f"edit_phys_desc_{artifact_id}",
+                                    height=100,
+                                    label_visibility="collapsed",
+                                )
+                            elif form_data.get("description"):
+                                st.markdown("**Physical Description:**")
+                                st.write(form_data["description"])
+
+                            # Display artifact name from form if available
+                            if edit_mode:
+                                st.markdown("**Artifact Name (from form):**")
+                                st.text_input(
+                                    "",
+                                    value=form_data.get("artifact_name", ""),
+                                    key=f"edit_artifact_name_{artifact_id}",
+                                    label_visibility="collapsed",
+                                )
+                            elif form_data.get("artifact_name"):
+                                st.markdown(
+                                    f"**Artifact Name (from form):** {form_data['artifact_name']}"
+                                )
+
+                            # Display tags from form if available
+                            form_tags = form_data.get("tags", [])
+                            if form_tags:
+                                if isinstance(form_tags, str):
+                                    form_tags = [
+                                        t.strip()
+                                        for t in form_tags.split(",")
+                                        if t.strip()
+                                    ]
+                                st.markdown("**Form Tags:**")
+                                tag_cols = st.columns(
+                                    len(form_tags) if form_tags else 1
+                                )
+                                for idx, tag in enumerate(form_tags):
+                                    with tag_cols[idx]:
+                                        st.write(f"🏷️ {tag}")
+                        else:
+                            st.json(form_data)
+
+                # Approval/Rejection buttons for admin users (at the bottom)
+                if st.session_state.get("role") in ["admin", "lab", "onsite"]:
+                    st.markdown("---")
+                    st.markdown("**🔐 Verification Actions**")
+                    col_approve, col_reject = st.columns(2)
+                    with col_approve:
+                        if st.button("✅ Approve", key=f"approve_{artifact_id}"):
+                            try:
+                                api_request(
+                                    "PUT",
+                                    f"api/artifacts/{artifact_id}",
+                                    data={"verification_status": "verified"},
+                                )
+                                st.success("✅ Artifact approved!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Failed to approve artifact: {str(e)}")
+                    with col_reject:
+                        if st.button("❌ Reject", key=f"reject_{artifact_id}"):
+                            try:
+                                api_request(
+                                    "PUT",
+                                    f"api/artifacts/{artifact_id}",
+                                    data={"verification_status": "rejected"},
+                                )
+                                st.success("❌ Artifact rejected!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Failed to reject artifact: {str(e)}")
         except Exception as e:
-            st.error(f"Error loading artifact details: {str(e)}")
-            logger.exception("Error in artifact detail view")
+            st.error(f"❌ Error loading artifact: {str(e)}")
+            logger.exception("Error loading artifact details")
 
 
 def search_page():
-    """Search page for finding artifacts."""
-    st.header("Search Artifacts")
+    """Search page for advanced artifact search."""
+    st.header("🔍 Advanced Search")
 
-    query = st.text_input("Search artifacts", placeholder="Enter search terms...")
+    search_query = st.text_input("Enter search term")
 
-    if query:
+    if search_query:
         try:
-            results = search_artifacts(query)
+            results = search_artifacts(search_query)
+
             if results:
                 st.success(f"Found {len(results)} artifacts")
+
                 for artifact in results:
                     with st.expander(
-                        f"{artifact.get('name', 'Unknown')} (ID: {artifact.get('id')})"
+                        f"{artifact.get('name')} (ID: {artifact.get('id')})"
                     ):
-                        image_url = artifact.get("thumbnail") or artifact.get(
-                            "image_data"
-                        )
-                        if image_url:
-                            st.image(
-                                image_url,
-                                width=200,
+                        col1, col2 = st.columns([1, 2])
+
+                        with col1:
+                            image_url = artifact.get("thumbnail") or artifact.get(
+                                "image_data"
                             )
-                        else:
-                            st.warning("No image available")
-                        st.markdown(
-                            f"**Description:** {artifact.get('description', 'N/A')}"
-                        )
-                        st.markdown(f"**Tags:** {', '.join(artifact.get('tags', []))}")
+                            if image_url:
+                                st.image(image_url, use_container_width=True)
+
+                        with col2:
+                            st.write(
+                                f"**Description:** {artifact.get('description', 'N/A')}"
+                            )
+                            artifact_tags = artifact.get("tags", [])
+                            if isinstance(artifact_tags, str):
+                                artifact_tags = [
+                                    t.strip()
+                                    for t in artifact_tags.split(",")
+                                    if t.strip()
+                                ]
+                            elif isinstance(artifact_tags, list):
+                                artifact_tags = [
+                                    str(t).strip() for t in artifact_tags if t
+                                ]
+                            st.write(f"**Tags:** {', '.join(artifact_tags)}")
+                            st.write(f"**Tier:** {artifact.get('tier', 'N/A')}")
             else:
-                st.info("No artifacts found matching your search.")
+                st.info("No artifacts found matching your search")
         except Exception as e:
-            st.error(f"Error during search: {str(e)}")
-
-
-#if __name__ == "__main__":
-    # Add a small delay to ensure backend is ready
-#    import time
-
-#    time.sleep(2)  # Wait 2 seconds for backend to start
-#    main()
+            st.error(f"Search failed: {str(e)}")
