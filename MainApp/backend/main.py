@@ -83,15 +83,26 @@ class ArtifactBase(BaseModel):
     tier: str
     image_data: str  # base64 encoded image
     form_data: Optional[FormData] = None  # Physical measurements from upload
+    model_3d_data: Optional[str] = None  # base64 encoded 3D model file
+    model_3d_format: Optional[str] = None  # Format: "obj", "stl", "ply"
+    uploaded_by: Optional[str] = None  # Username of uploader
 
 
 class Artifact(ArtifactBase):
     id: int
+    has_3d_model: Optional[bool] = False  # Indicates if 3D model is available
+
+
+class VerificationRequest(BaseModel):
+    """Request model for artifact verification with required reason."""
+    verification_status: str  # "verified" or "rejected"
+    reason: str  # Required reason for the decision
+    verified_by: str  # Username of verifier
 
 
 @app.post("/api/artifacts")
 async def create_artifact(artifact: ArtifactBase):
-    """Create a new artifact with optional form data"""
+    """Create a new artifact with optional form data and 3D model"""
     try:
         # Decode base64 image
         image_data = base64.b64decode(
@@ -113,17 +124,31 @@ async def create_artifact(artifact: ArtifactBase):
             "description": artifact.description,
             "tags": ",".join(artifact.tags) if artifact.tags else "",
             "tier": artifact.tier,
+            "uploaded_by": artifact.uploaded_by,
         }
 
         # Store form data as JSON string if provided
         if artifact.form_data:
             artifact_data["form_data"] = json.dumps(artifact.form_data.dict())
 
+        # Decode and store 3D model data if provided
+        model_3d_bytes = None
+        if artifact.model_3d_data:
+            model_3d_bytes = base64.b64decode(
+                artifact.model_3d_data.split(",")[1]
+                if "," in artifact.model_3d_data
+                else artifact.model_3d_data
+            )
+            artifact_data["model_3d_format"] = artifact.model_3d_format or "obj"
+
         artifact_id = save_artifact(
-            artifact_data, image_bytes=image_data, thumbnail_bytes=thumbnail_data
+            artifact_data,
+            image_bytes=image_data,
+            thumbnail_bytes=thumbnail_data,
+            model_3d_bytes=model_3d_bytes
         )
 
-        return {"id": artifact_id, "message": "Artifact created successfully"}
+        return {"id": artifact_id, "message": "Artifact created successfully", "has_3d_model": model_3d_bytes is not None}
     except Exception as e:
         logger.error(f"Error creating artifact: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -217,6 +242,17 @@ async def get_artifact(artifact_id: int):
         else:
             image_data_url = f"data:image/png;base64,{artifact['image_data']}"
 
+    # Handle 3D model data
+    model_3d_data_url = None
+    has_3d_model = False
+    if artifact.get("model_3d_data"):
+        has_3d_model = True
+        model_format = artifact.get("model_3d_format", "obj")
+        if isinstance(artifact["model_3d_data"], bytes):
+            model_3d_data_url = f"data:model/{model_format};base64,{base64.b64encode(artifact['model_3d_data']).decode()}"
+        else:
+            model_3d_data_url = f"data:model/{model_format};base64,{artifact['model_3d_data']}"
+
     return {
         "id": artifact["id"],
         "name": artifact["name"],
@@ -232,6 +268,9 @@ async def get_artifact(artifact_id: int):
         "verification_status": artifact.get("verification_status", "pending"),
         "verified_by": artifact.get("verified_by"),
         "verified_at": artifact.get("verified_at"),
+        "model_3d_data": model_3d_data_url,
+        "model_3d_format": artifact.get("model_3d_format"),
+        "has_3d_model": has_3d_model,
     }
 
 
@@ -485,7 +524,7 @@ async def similarity_search_endpoint(req: SimilaritySearchRequest):
 
 @app.patch("/api/artifacts/{artifact_id}/verification")
 async def update_artifact_verification(artifact_id: int, verification_status: str):
-    """Update verification status of an artifact."""
+    """Update verification status of an artifact (deprecated - use POST /verify instead)."""
     try:
         from database import update_artifact_verification
 
@@ -495,6 +534,76 @@ async def update_artifact_verification(artifact_id: int, verification_status: st
         return result
     except Exception as e:
         logger.error(f"Error updating verification status: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/artifacts/{artifact_id}/verify")
+async def verify_artifact_with_reason(artifact_id: int, request: VerificationRequest):
+    """
+    Verify or reject an artifact with a required reason.
+    Sends email notification to the uploader.
+    """
+    try:
+        from database import update_artifact_verification, get_artifact_by_id
+        from login import get_user_info
+        from email_utils import send_verification_notification
+
+        # Validate reason is provided
+        if not request.reason or not request.reason.strip():
+            raise HTTPException(status_code=400, detail="Reason is required for verification/rejection")
+
+        # Get artifact details before update
+        artifact = get_artifact_by_id(artifact_id)
+        if not artifact:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+
+        artifact_name = artifact.get("name", "Unknown Artifact")
+        uploaded_by = artifact.get("uploaded_by")
+
+        # Update verification status with comments
+        if request.verification_status.lower() == "rejected":
+            # Delete the artifact for rejections
+            from database import delete_artifact
+            deleted = delete_artifact(artifact_id)
+            if not deleted:
+                raise HTTPException(status_code=404, detail="Artifact not found")
+            result = {"id": artifact_id, "verification_status": "rejected", "message": "Artifact rejected and deleted"}
+        else:
+            # Approve the artifact
+            result = update_artifact_verification(
+                artifact_id,
+                request.verification_status,
+                verified_by=request.verified_by,
+                comments=request.reason
+            )
+            if not result:
+                raise HTTPException(status_code=404, detail="Artifact not found")
+
+        # Send email notification to uploader
+        email_sent = False
+        if uploaded_by:
+            try:
+                user_info = get_user_info(uploaded_by)
+                if user_info and len(user_info) >= 2:
+                    uploader_email = user_info[1]  # email is second field
+                    if uploader_email:
+                        email_sent = send_verification_notification(
+                            to_email=uploader_email,
+                            artifact_name=artifact_name,
+                            status=request.verification_status,
+                            reason=request.reason,
+                            verified_by=request.verified_by
+                        )
+            except Exception as email_error:
+                logger.warning(f"Could not send email notification: {email_error}")
+
+        result["email_sent"] = email_sent
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error verifying artifact: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -545,8 +654,8 @@ async def update_artifact_endpoint(artifact_id: int, update_data: dict):
                 if isinstance(artifact["form_data"], str):
                     try:
                         existing_form_data = json.loads(artifact["form_data"])
-                    except:
-                        pass
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning(f"Failed to parse form_data for artifact {artifact_id}")
                 elif isinstance(artifact["form_data"], dict):
                     existing_form_data = artifact["form_data"]
 

@@ -157,7 +157,7 @@ init_db()
 users = get_users()
 names = [u[1] for u in users]
 usernames = [u[0] for u in users]
-hashed_passwords = [u[2] for u in users]
+# Note: hashed_passwords are loaded via load_credentials() for the authenticator
 
 
 # -------------------- Authenticator --------------------
