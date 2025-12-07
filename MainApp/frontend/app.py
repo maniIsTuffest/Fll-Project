@@ -1,7 +1,10 @@
 import base64
 import logging
+import os
+import tempfile
 from io import BytesIO
 
+import obj2html
 import requests
 import streamlit as st
 from PIL import Image
@@ -9,6 +12,15 @@ from PIL import Image
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# 3D Model Viewer import (optional - gracefully handle if not available)
+try:
+    from model_3d_viewer import Model3DViewer, save_uploaded_obj_file
+
+    HAS_3D_VIEWER = True
+except ImportError:
+    HAS_3D_VIEWER = False
+    logger.warning("3D viewer module not available")
 
 # API configuration
 API_BASE_URL = "http://localhost:8000"
@@ -66,8 +78,18 @@ def get_artifact(artifact_id):
     return api_request("GET", f"api/artifacts/{artifact_id}")
 
 
-def create_artifact(name, description, tags, tier, image_data, form_data=None):
-    """Create a new artifact"""
+def create_artifact(
+    name,
+    description,
+    tags,
+    tier,
+    image_data,
+    form_data=None,
+    model_3d_data=None,
+    model_3d_format=None,
+    uploaded_by=None,
+):
+    """Create a new artifact with optional 3D model"""
     payload = {
         "name": name,
         "description": description,
@@ -77,6 +99,11 @@ def create_artifact(name, description, tags, tier, image_data, form_data=None):
     }
     if form_data:
         payload["form_data"] = form_data
+    if model_3d_data:
+        payload["model_3d_data"] = model_3d_data
+        payload["model_3d_format"] = model_3d_format or "obj"
+    if uploaded_by:
+        payload["uploaded_by"] = uploaded_by
     return api_request("POST", "api/artifacts", data=payload)
 
 
@@ -166,12 +193,11 @@ def main(role):
                 st.rerun()
 
     with tb4:
-        if role in ["admin", "field", "user"]:
-            if st.button("➕", use_container_width=True):
-                if "selected_artifact" in st.session_state:
-                    del st.session_state["selected_artifact"]
-                st.session_state["view_mode"] = "add"
-                st.rerun()
+        if st.button("➕", use_container_width=True):
+            if "selected_artifact" in st.session_state:
+                del st.session_state["selected_artifact"]
+            st.session_state["view_mode"] = "add"
+            st.rerun()
 
     st.markdown(
         "<style>"
@@ -192,9 +218,23 @@ def main(role):
 
 
 def identify_artifact_page():
-    """Single artifact identification page with form data capture."""
+    """Artifact identification page with form data capture - supports single or batch upload."""
     st.header("📤 Upload & Identify Artifact")
 
+    # Choose upload mode: Single (with form) or Batch (multiple images)
+    upload_mode = st.radio(
+        "Upload mode",
+        ["Single (with details)", "Batch (multiple images)"],
+        horizontal=True,
+        help="Single mode allows detailed form data per artifact. Batch mode analyzes multiple images quickly.",
+    )
+
+    if upload_mode == "Batch (multiple images)":
+        # Batch upload mode
+        _batch_upload_section()
+        return
+
+    # Single artifact mode
     # Choose source: Upload or Camera
     source = st.radio("Image source", ["Upload", "Camera"], horizontal=True)
     uploaded_file = None
@@ -345,6 +385,49 @@ def identify_artifact_page():
                     st.session_state["last_form_data"] = form_data
                     st.success("✅ Form data saved! You can now analyze the artifact.")
 
+            # 3D Model Upload Section (outside form due to Streamlit limitations)
+            st.markdown("---")
+            st.markdown("**🎯 3D Model (Optional)**")
+            uploaded_3d_model = st.file_uploader(
+                "Upload 3D Model",
+                type=["obj", "stl", "ply"],
+                help="Optional: Upload a 3D model scan of the artifact (OBJ, STL, or PLY format)",
+                key="model_3d_upload",
+            )
+
+            if uploaded_3d_model is not None:
+                # Store 3D model in session state
+                model_3d_bytes = uploaded_3d_model.getvalue()
+                model_3d_b64 = base64.b64encode(model_3d_bytes).decode()
+                model_format = uploaded_3d_model.name.split(".")[-1].lower()
+                st.session_state["last_model_3d_data"] = model_3d_b64
+                st.session_state["last_model_3d_format"] = model_format
+                st.success(
+                    f"✅ 3D model loaded: {uploaded_3d_model.name} ({model_format.upper()})"
+                )
+
+                # Preview 3D model if viewer is available
+                if HAS_3D_VIEWER and model_format == "obj":
+                    with st.expander("🔍 Preview 3D Model", expanded=False):
+                        temp_file_path = save_uploaded_obj_file(uploaded_3d_model)
+                        if temp_file_path:
+                            try:
+                                viewer = Model3DViewer()
+                                viewer.render_3d_model(temp_file_path, height=400)
+                            except Exception as e:
+                                st.warning(f"Could not render 3D preview: {e}")
+                            finally:
+                                try:
+                                    os.unlink(temp_file_path)
+                                except:
+                                    pass
+            else:
+                # Clear 3D model from session if removed
+                if "last_model_3d_data" in st.session_state:
+                    del st.session_state["last_model_3d_data"]
+                if "last_model_3d_format" in st.session_state:
+                    del st.session_state["last_model_3d_format"]
+
         # RIGHT COLUMN: Analysis Controls and Results
         with col2:
             st.subheader("🤖 AI Analysis")
@@ -441,7 +524,13 @@ def identify_artifact_page():
                                 t.strip() for t in final_tags.split(",") if t.strip()
                             ]
 
-                            # Create artifact with form data attached
+                            # Get 3D model data if available
+                            model_3d_data = st.session_state.get("last_model_3d_data")
+                            model_3d_format = st.session_state.get(
+                                "last_model_3d_format"
+                            )
+
+                            # Create artifact with form data and 3D model attached
                             result_data = create_artifact(
                                 name=final_name,
                                 description=final_description,
@@ -449,10 +538,17 @@ def identify_artifact_page():
                                 tier=tier,
                                 image_data=img_data_url,
                                 form_data=form_data,
+                                model_3d_data=model_3d_data,
+                                model_3d_format=model_3d_format,
+                                uploaded_by=st.session_state.get("username"),
                             )
 
                             artifact_id = result_data.get("id")
-                            st.success(f"✅ Artifact saved! ID: {artifact_id}")
+                            has_3d = result_data.get("has_3d_model", False)
+                            save_msg = f"✅ Artifact saved! ID: {artifact_id}"
+                            if has_3d:
+                                save_msg += " (with 3D model)"
+                            st.success(save_msg)
                             st.balloons()
 
                             # Clear session state
@@ -462,12 +558,199 @@ def identify_artifact_page():
                                 del st.session_state["last_form_data"]
                             if "last_image" in st.session_state:
                                 del st.session_state["last_image"]
+                            if "last_model_3d_data" in st.session_state:
+                                del st.session_state["last_model_3d_data"]
+                            if "last_model_3d_format" in st.session_state:
+                                del st.session_state["last_model_3d_format"]
 
                             st.rerun()
 
                         except Exception as e:
                             st.error(f"❌ Failed to save artifact: {str(e)}")
                             logger.exception("Save artifact error")
+
+
+def _batch_upload_section():
+    """Batch upload section for multiple images."""
+    st.subheader("📦 Batch Upload")
+    st.info(
+        "Upload multiple artifact images for quick analysis. Each image will be analyzed and can be saved individually."
+    )
+
+    # Multiple file uploader
+    uploaded_files = st.file_uploader(
+        "Upload artifact images",
+        type=["jpg", "jpeg", "png", "webp"],
+        accept_multiple_files=True,
+        help="Select multiple images to analyze in batch",
+        key="batch_upload",
+    )
+
+    if not uploaded_files:
+        st.info("👆 Select one or more images to begin batch analysis")
+        return
+
+    st.success(f"✅ {len(uploaded_files)} image(s) selected")
+
+    # Tier selection for batch
+    tier = st.selectbox(
+        "Analysis Quality",
+        ["fast", "balanced", "thorough"],
+        index=0,
+        help="Fast: ~20-40s per image | Balanced: ~30-60s | Thorough: ~1-2 min",
+    )
+
+    # Optional 3D model for batch (applies to all artifacts in batch)
+    st.markdown("---")
+    st.markdown("**🎯 3D Model (Optional - applies to all artifacts)**")
+    batch_3d_model = st.file_uploader(
+        "Upload 3D Model for batch",
+        type=["obj", "stl", "ply"],
+        help="Optional: This 3D model will be attached to all artifacts in this batch",
+        key="batch_model_3d_upload",
+    )
+
+    batch_model_3d_data = None
+    batch_model_3d_format = None
+    if batch_3d_model:
+        batch_model_3d_data = base64.b64encode(batch_3d_model.getvalue()).decode()
+        batch_model_3d_format = batch_3d_model.name.split(".")[-1].lower()
+        st.success(f"✅ 3D model loaded: {batch_3d_model.name}")
+
+    # Analyze button
+    if st.button("🔍 Analyze All Images", use_container_width=True):
+        # Initialize batch results in session state
+        st.session_state["batch_results"] = []
+
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        for idx, uploaded_file in enumerate(uploaded_files):
+            status_text.text(
+                f"Analyzing {idx + 1}/{len(uploaded_files)}: {uploaded_file.name}"
+            )
+            progress_bar.progress((idx) / len(uploaded_files))
+
+            try:
+                # Convert to base64
+                image = Image.open(uploaded_file)
+                buffered = BytesIO()
+                image.save(buffered, format="PNG")
+                img_str = base64.b64encode(buffered.getvalue()).decode()
+                img_data_url = f"data:image/png;base64,{img_str}"
+
+                # Analyze
+                result = analyze_image(img_data_url, tier=tier)
+
+                # Store result with image data
+                result["_image_data"] = img_data_url
+                result["_filename"] = uploaded_file.name
+                result["_model_3d_data"] = batch_model_3d_data
+                result["_model_3d_format"] = batch_model_3d_format
+                st.session_state["batch_results"].append(result)
+
+            except Exception as e:
+                st.session_state["batch_results"].append(
+                    {
+                        "error": str(e),
+                        "_filename": uploaded_file.name,
+                        "name": f"Error: {uploaded_file.name}",
+                    }
+                )
+
+        progress_bar.progress(1.0)
+        status_text.text("✅ Batch analysis complete!")
+
+    # Display batch results
+    if "batch_results" in st.session_state and st.session_state["batch_results"]:
+        st.markdown("---")
+        st.subheader("📊 Batch Results")
+
+        results = st.session_state["batch_results"]
+        successful = [r for r in results if "error" not in r]
+        failed = [r for r in results if "error" in r]
+
+        st.write(f"✅ Successful: {len(successful)} | ❌ Failed: {len(failed)}")
+
+        # Display each result in expandable sections
+        for idx, result in enumerate(results):
+            filename = result.get("_filename", f"Image {idx + 1}")
+
+            if "error" in result:
+                with st.expander(f"❌ {filename} - Error", expanded=False):
+                    st.error(result["error"])
+            else:
+                artifact_name = result.get("name", "Unknown")
+                with st.expander(f"✅ {filename} → {artifact_name}", expanded=False):
+                    col1, col2 = st.columns([1, 2])
+
+                    with col1:
+                        if result.get("_image_data"):
+                            st.image(result["_image_data"], use_container_width=True)
+
+                    with col2:
+                        st.write(f"**Name:** {result.get('name', 'Unknown')}")
+                        st.write(f"**Description:** {result.get('description', 'N/A')}")
+                        st.write(f"**Confidence:** {result.get('confidence', 0):.1%}")
+                        tags = result.get("tags", [])
+                        if tags:
+                            st.write(f"**Tags:** {', '.join(tags)}")
+
+                    # Save button for this artifact
+                    if st.button(f"💾 Save to Archive", key=f"save_batch_{idx}"):
+                        try:
+                            tag_list = result.get("tags", [])
+                            if isinstance(tag_list, str):
+                                tag_list = [
+                                    t.strip() for t in tag_list.split(",") if t.strip()
+                                ]
+
+                            save_result = create_artifact(
+                                name=result.get("name", "Unknown"),
+                                description=result.get("description", ""),
+                                tags=tag_list,
+                                tier=tier,
+                                image_data=result["_image_data"],
+                                form_data=None,
+                                model_3d_data=result.get("_model_3d_data"),
+                                model_3d_format=result.get("_model_3d_format"),
+                                uploaded_by=st.session_state.get("username"),
+                            )
+                            st.success(f"✅ Saved! ID: {save_result.get('id')}")
+                        except Exception as e:
+                            st.error(f"❌ Failed to save: {str(e)}")
+
+        # Save all button
+        st.markdown("---")
+        if st.button("💾 Save All Successful to Archive", use_container_width=True):
+            saved_count = 0
+            for idx, result in enumerate(successful):
+                try:
+                    tag_list = result.get("tags", [])
+                    if isinstance(tag_list, str):
+                        tag_list = [t.strip() for t in tag_list.split(",") if t.strip()]
+
+                    create_artifact(
+                        name=result.get("name", "Unknown"),
+                        description=result.get("description", ""),
+                        tags=tag_list,
+                        tier=tier,
+                        image_data=result["_image_data"],
+                        form_data=None,
+                        model_3d_data=result.get("_model_3d_data"),
+                        model_3d_format=result.get("_model_3d_format"),
+                        uploaded_by=st.session_state.get("username"),
+                    )
+                    saved_count += 1
+                except Exception as e:
+                    st.warning(f"Failed to save {result.get('_filename')}: {str(e)}")
+
+            st.success(f"✅ Saved {saved_count} artifacts to archive!")
+            st.balloons()
+
+            # Clear batch results
+            del st.session_state["batch_results"]
+            st.rerun()
 
 
 def _make_square_thumbnail_b64(image_b64: str, size: int = 200) -> str:
@@ -757,7 +1040,7 @@ def archive_page():
                     # Create two columns for layout in popup
                     detail_left, detail_right = st.columns([1, 2])
 
-                    # Left: Image
+                    # Left: Image and 3D Model
                     with detail_left:
                         image_url = artifact.get("image_data") or artifact.get(
                             "thumbnail"
@@ -766,6 +1049,75 @@ def archive_page():
                             st.image(image_url, use_container_width=True)
                         else:
                             st.warning("No image available")
+
+                        # 3D Model viewer if available
+                        if artifact.get("has_3d_model") and artifact.get(
+                            "model_3d_data"
+                        ):
+                            st.markdown("---")
+                            st.markdown("**🎯 3D Model**")
+                            model_format = artifact.get("model_3d_format", "obj")
+
+                            if HAS_3D_VIEWER and model_format == "obj":
+                                # Decode and display 3D model
+                                try:
+                                    model_data_url = artifact["model_3d_data"]
+                                    if "," in model_data_url:
+                                        model_b64 = model_data_url.split(",")[1]
+                                    else:
+                                        model_b64 = model_data_url
+                                    model_bytes = base64.b64decode(model_b64)
+
+                                    # Save to temp file for viewer
+                                    with tempfile.NamedTemporaryFile(
+                                        delete=False, suffix=".obj"
+                                    ) as tmp_file:
+                                        tmp_file.write(model_bytes)
+                                        tmp_path = tmp_file.name
+
+                                    with st.expander("🔍 View 3D Model", expanded=True):
+                                        viewer = Model3DViewer()
+                                        viewer.render_3d_model(tmp_path, height=350)
+
+                                    # Clean up temp file
+                                    try:
+                                        os.unlink(tmp_path)
+                                    except:
+                                        pass
+                                except Exception as e:
+                                    st.warning(f"Could not render 3D model: {e}")
+                                    logger.error(f"3D model render error: {e}")
+                            else:
+                                # Provide download button for non-OBJ formats or when viewer unavailable
+                                st.info(
+                                    f"3D model available ({model_format.upper()} format)"
+                                )
+                                model_data_url = artifact["model_3d_data"]
+                                if "," in model_data_url:
+                                    model_b64 = model_data_url.split(",")[1]
+                                else:
+                                    model_b64 = model_data_url
+                                model_bytes = base64.b64decode(model_b64)
+                                obj_text = model_bytes.decode('utf-8')
+                                 # make temporary .obj file
+                                tmp_path = ""
+                                with tempfile.NamedTemporaryFile(suffix=".obj", delete=False) as tmp:
+                                    tmp.write(obj_text.encode("utf-8"))
+                                    tmp_path = tmp.name
+
+                                html_output = obj2html.obj2html(
+                                    tmp_path, html_elements_only=True
+                                )
+                                st.components.v1.html(
+                                    html_output,width='stretch',height='stretch',  scrolling=True
+                                )
+                                st.download_button(
+                                    label=f"📥 Download 3D Model (.{model_format})",
+                                    data=model_bytes,
+                                    file_name=f"artifact_{artifact_id}.{model_format}",
+                                    mime=f"model/{model_format}",
+                                    key=f"download_3d_{artifact_id}",
+                                )
 
                     # Right: Details
                     with detail_right:
@@ -961,31 +1313,85 @@ def archive_page():
                 if st.session_state.get("role") in ["admin", "lab", "onsite"]:
                     st.markdown("---")
                     st.markdown("**🔐 Verification Actions**")
+
+                    # Show uploader info if available
+                    uploaded_by = artifact.get("uploaded_by")
+                    if uploaded_by:
+                        st.info(f"📤 Uploaded by: **{uploaded_by}**")
+
+                    # Reason input (required)
+                    verification_reason = st.text_area(
+                        "Reason for decision (required)*",
+                        placeholder="Please provide a detailed reason for your decision. This will be sent to the uploader.",
+                        key=f"reason_{artifact_id}",
+                        height=100,
+                    )
+
                     col_approve, col_reject = st.columns(2)
                     with col_approve:
-                        if st.button("✅ Approve", key=f"approve_{artifact_id}"):
-                            try:
-                                api_request(
-                                    "PUT",
-                                    f"api/artifacts/{artifact_id}",
-                                    data={"verification_status": "verified"},
-                                )
-                                st.success("✅ Artifact approved!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Failed to approve artifact: {str(e)}")
+                        if st.button(
+                            "✅ Approve",
+                            key=f"approve_{artifact_id}",
+                            use_container_width=True,
+                        ):
+                            if (
+                                not verification_reason
+                                or not verification_reason.strip()
+                            ):
+                                st.error("❌ Please provide a reason for approval")
+                            else:
+                                try:
+                                    result = api_request(
+                                        "POST",
+                                        f"api/artifacts/{artifact_id}/verify",
+                                        data={
+                                            "verification_status": "verified",
+                                            "reason": verification_reason.strip(),
+                                            "verified_by": st.session_state.get(
+                                                "username", "unknown"
+                                            ),
+                                        },
+                                    )
+                                    st.success("✅ Artifact approved!")
+                                    if result.get("email_sent"):
+                                        st.info(
+                                            "📧 Email notification sent to uploader"
+                                        )
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ Failed to approve artifact: {str(e)}")
                     with col_reject:
-                        if st.button("❌ Reject", key=f"reject_{artifact_id}"):
-                            try:
-                                api_request(
-                                    "PUT",
-                                    f"api/artifacts/{artifact_id}",
-                                    data={"verification_status": "rejected"},
-                                )
-                                st.success("❌ Artifact rejected!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Failed to reject artifact: {str(e)}")
+                        if st.button(
+                            "❌ Reject",
+                            key=f"reject_{artifact_id}",
+                            use_container_width=True,
+                        ):
+                            if (
+                                not verification_reason
+                                or not verification_reason.strip()
+                            ):
+                                st.error("❌ Please provide a reason for rejection")
+                            else:
+                                try:
+                                    result = api_request(
+                                        "POST",
+                                        f"api/artifacts/{artifact_id}/verify",
+                                        data={
+                                            "verification_status": "rejected",
+                                            "reason": verification_reason.strip(),
+                                            "verified_by": st.session_state.get(
+                                                "username", "unknown"
+                                            ),
+                                        },
+                                    )
+                                    st.success("❌ Artifact rejected!")
+                                    if result.get("email_sent"):
+                                        st.info(
+                                            "📧 Email notification sent to uploader"
+                                        )
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ Failed to reject artifact: {str(e)}")
         except Exception as e:
             st.error(f"❌ Error loading artifact: {str(e)}")
             logger.exception("Error loading artifact details")
