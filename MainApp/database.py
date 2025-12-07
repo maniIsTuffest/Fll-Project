@@ -80,10 +80,15 @@ class Artifact(Base):
     # Image data
     image_data: Optional[bytes] = Column(LargeBinary)
     thumbnail: Optional[bytes] = Column(LargeBinary)
+    
+    # 3D model data
+    model_3d_data: Optional[bytes] = Column(LargeBinary)
+    model_3d_format: Optional[str] = Column(String(10))  # e.g., "obj", "stl", "ply"
 
     # Timestamps
     uploaded_at: datetime = Column(DateTime, default=datetime.utcnow, nullable=False)
     analyzed_at: Optional[datetime] = Column(DateTime, default=datetime.utcnow)
+    updated_at: Optional[datetime] = Column(DateTime)
 
     # Expert verification fields
     verification_status: str = Column(String(50), default="pending")
@@ -104,6 +109,9 @@ class Artifact(Base):
     # Analysis tier used
     tier: Optional[str] = Column(String(50))
 
+    # User who uploaded the artifact
+    uploaded_by: Optional[str] = Column(String(200))
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert artifact to a plain‑dictionary representation."""
         return {
@@ -119,11 +127,16 @@ class Artifact(Base):
             "confidence": self.confidence,
             "image_data": self.image_data,
             "thumbnail": self.thumbnail,
+            "model_3d_data": self.model_3d_data,
+            "model_3d_format": self.model_3d_format,
             "uploaded_at": self.uploaded_at.isoformat() + "Z"
             if self.uploaded_at
             else None,
             "analyzed_at": self.analyzed_at.isoformat() + "Z"
             if self.analyzed_at
+            else None,
+            "updated_at": self.updated_at.isoformat() + "Z"
+            if self.updated_at
             else None,
             "verification_status": self.verification_status,
             "verified_by": self.verified_by,
@@ -135,6 +148,7 @@ class Artifact(Base):
             "tags": self.tags,
             "form_data": self.form_data,
             "tier": self.tier,
+            "uploaded_by": self.uploaded_by,
         }
 
 
@@ -157,6 +171,14 @@ def init_db() -> None:
                 conn.execute(text("ALTER TABLE artifacts ADD COLUMN form_data TEXT"))
             if "tier" not in columns:
                 conn.execute(text("ALTER TABLE artifacts ADD COLUMN tier VARCHAR(50)"))
+            if "updated_at" not in columns:
+                conn.execute(text("ALTER TABLE artifacts ADD COLUMN updated_at DATETIME"))
+            if "model_3d_data" not in columns:
+                conn.execute(text("ALTER TABLE artifacts ADD COLUMN model_3d_data BLOB"))
+            if "model_3d_format" not in columns:
+                conn.execute(text("ALTER TABLE artifacts ADD COLUMN model_3d_format VARCHAR(10)"))
+            if "uploaded_by" not in columns:
+                conn.execute(text("ALTER TABLE artifacts ADD COLUMN uploaded_by VARCHAR(200)"))
             conn.commit()
     except Exception:
         # Best-effort; ignore if not supported or already exists
@@ -203,6 +225,7 @@ def save_artifact(
     artifact_data: Dict[str, Any],
     image_bytes: bytes = None,
     thumbnail_bytes: bytes = None,
+    model_3d_bytes: bytes = None,
 ) -> int:
     """Persist a newly analysed artifact and return its primary key."""
     with get_db() as db:
@@ -212,6 +235,8 @@ def save_artifact(
         thumbnail_to_save = (
             thumbnail_bytes if thumbnail_bytes else artifact_data.get("thumbnail")
         )
+        # Handle 3D model data
+        model_3d_to_save = model_3d_bytes if model_3d_bytes else artifact_data.get("model_3d_data")
 
         artifact = Artifact(
             name=artifact_data.get("name", "Unknown"),
@@ -225,10 +250,13 @@ def save_artifact(
             confidence=artifact_data.get("confidence", 0.0),
             image_data=image_to_save,
             thumbnail=thumbnail_to_save,
+            model_3d_data=model_3d_to_save,
+            model_3d_format=artifact_data.get("model_3d_format"),
             analyzed_at=datetime.utcnow(),
             tags=",".join(tags_list) if tags_list else None,
             form_data=artifact_data.get("form_data"),
             tier=artifact_data.get("tier"),
+            uploaded_by=artifact_data.get("uploaded_by"),
         )
         db.add(artifact)
         db.flush()  # Obtain PK without committing twice

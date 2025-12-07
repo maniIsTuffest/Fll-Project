@@ -20,14 +20,7 @@ credentials:
       logged_in: False # Will be managed automatically
       password: abc # Will be hashed automatically
       role: onsite
-      email: user3@example.com
-    user4:
-      name: Normal User
-      failed_login_attempts: 0 # Will be managed automatically
-      logged_in: False # Will be managed automatically
-      password: abc # Will be hashed automatically
-      role: user
-      email: user4@example.com
+      email: kirprap2@gmail.com
 cookie:
   name: my_cookie_name
   key: my_signature_key

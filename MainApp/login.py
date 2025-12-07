@@ -63,7 +63,6 @@ def init_db():
 
         conn.commit()
 
-
 def load_credentials():
     conn = sqlite3.connect("users.db")
     cur = conn.cursor()
@@ -99,20 +98,17 @@ def get_user_role(username):
         result = c.fetchone()
         return result[0] if result else None
 
-
 def get_user_info(username):
     with sqlite3.connect(DB_FILE, timeout=10) as conn:
         c = conn.cursor()
         c.execute("SELECT name, email, role FROM users WHERE username=?", (username,))
         return c.fetchone()
 
-
 def get_users():
     with sqlite3.connect(DB_FILE, timeout=10) as conn:
         c = conn.cursor()
         c.execute("SELECT username, name, role, email FROM users")
         return c.fetchall()
-
 
 def add_user(username, name, password, role, email):
     with sqlite3.connect(DB_FILE, timeout=10) as conn:
@@ -128,7 +124,6 @@ def add_user(username, name, password, role, email):
             return True
         except sqlite3.IntegrityError:
             return False
-
 
 def reset_password(username, new_password):
     with sqlite3.connect(DB_FILE, timeout=10) as conn:
@@ -157,8 +152,7 @@ init_db()
 users = get_users()
 names = [u[1] for u in users]
 usernames = [u[0] for u in users]
-hashed_passwords = [u[2] for u in users]
-
+# Note: hashed_passwords are loaded via load_credentials() for the authenticator
 
 # -------------------- Authenticator --------------------
 def get_authenticator():
