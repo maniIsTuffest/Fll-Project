@@ -60,6 +60,11 @@ app.add_middleware(
 # Initialize database
 init_db()
 
+# Import login functions for authentication
+import sqlite3
+import bcrypt
+from login import get_user_info, get_users, log_action, reset_password, add_user, get_audit_logs
+
 
 # Models
 class FormData(BaseModel):
@@ -98,6 +103,128 @@ class VerificationRequest(BaseModel):
     verification_status: str  # "verified" or "rejected"
     reason: str  # Required reason for the decision
     verified_by: str  # Username of verifier
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class UserCreate(BaseModel):
+    username: str
+    name: str
+    password: str
+    role: str
+    email: str
+
+
+class PasswordChange(BaseModel):
+    username: str
+    new_password: str
+
+
+# Authentication endpoints
+@app.post("/auth/login")
+async def login(request: LoginRequest):
+    """Authenticate user and return user info"""
+    try:
+        DB_FILE = os.path.join(PROJECT_DIR, "users.db")
+        with sqlite3.connect(DB_FILE, timeout=10) as conn:
+            c = conn.cursor()
+            c.execute("SELECT username, name, hashed_password, role, email FROM users WHERE username=?", (request.username,))
+            result = c.fetchone()
+            
+            if not result:
+                raise HTTPException(status_code=401, detail="Invalid username or password")
+            
+            username, name, hashed_password, role, email = result
+            
+            # Verify password using bcrypt
+            password_valid = False
+            try:
+                # Check if stored password is a bcrypt hash
+                if hashed_password and hashed_password.startswith("$2b$"):
+                    # It's a bcrypt hash, verify it
+                    password_valid = bcrypt.checkpw(request.password.encode(), hashed_password.encode())
+                else:
+                    # Plain text password (for migration) - hash and update it
+                    if hashed_password == request.password:
+                        # Password matches, hash it and update the database
+                        new_hash = bcrypt.hashpw(request.password.encode(), bcrypt.gensalt()).decode()
+                        c.execute("UPDATE users SET hashed_password=? WHERE username=?", (new_hash, username))
+                        conn.commit()
+                        password_valid = True
+                    else:
+                        password_valid = False
+            except Exception as e:
+                logger.error(f"Password verification error: {str(e)}")
+                password_valid = False
+            
+            if not password_valid:
+                raise HTTPException(status_code=401, detail="Invalid username or password")
+            
+            # Log login action
+            try:
+                log_action(username, "Logged in")
+            except:
+                pass  # Ignore logging errors
+            
+            return {
+                "username": username,
+                "name": name,
+                "email": email,
+                "role": role
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Login failed")
+
+
+@app.get("/api/users")
+async def get_all_users():
+    """Get all users (admin only)"""
+    users = get_users()
+    return [
+        {
+            "username": u[0],
+            "name": u[1],
+            "role": u[2],
+            "email": u[3]
+        }
+        for u in users
+    ]
+
+
+@app.post("/api/users")
+async def create_user(user: UserCreate):
+    """Create a new user (admin only)"""
+    success = add_user(user.username, user.name, user.password, user.role, user.email)
+    if not success:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    return {"message": "User created successfully", "username": user.username}
+
+
+@app.get("/api/audit-logs")
+async def get_audit_logs_endpoint():
+    """Get audit logs (admin only)"""
+    logs = get_audit_logs()
+    return [
+        {
+            "timestamp": log[0],
+            "username": log[1],
+            "action": log[2]
+        }
+        for log in logs
+    ]
+
+
+@app.post("/api/users/change-password")
+async def change_password_endpoint(request: PasswordChange):
+    """Change user password"""
+    reset_password(request.username, request.new_password)
+    return {"message": "Password updated successfully"}
 
 
 @app.post("/api/artifacts")

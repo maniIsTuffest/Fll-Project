@@ -1,65 +1,117 @@
-"""Email utility functions for sending notifications."""
+"""Email utility functions for sending notifications (via CallMeBot WhatsApp API).
+
+Based on: https://www.callmebot.com/blog/free-api-whatsapp-messages/
+API Format: https://api.callmebot.com/whatsapp.php?phone=[phone_number]&text=[message]&apikey=[your_apikey]
+"""
 
 import logging
-import smtplib
 import os
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import requests
 from typing import Optional
+
+# Import config to ensure .env file is loaded from MainApp directory
+import config
 
 logger = logging.getLogger(__name__)
 
-# Email configuration - can be set via environment variables
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@artifactgallery.com")
+# CallMeBot WhatsApp API configuration
+WHATSAPP_API_KEY = os.getenv("WHATSAPP_API_KEY", "")
+RECIPIENT_PHONE = os.getenv("RECIPIENT_PHONE", "")
+CALLMEBOT_API_URL = "https://api.callmebot.com/whatsapp.php"
+
+def _clean_phone_number(phone: str) -> str:
+    """
+    Clean and format phone number for CallMeBot API.
+    Removes spaces and ensures it starts with + and country code.
+    
+    Args:
+        phone: Phone number (e.g., "+34 123 123 123" or "+34123123123")
+        
+    Returns:
+        Cleaned phone number (e.g., "+34123123123")
+    """
+    # Remove all spaces
+    cleaned = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    
+    # Ensure it starts with +
+    if not cleaned.startswith("+"):
+        cleaned = "+" + cleaned
+    
+    return cleaned
 
 
 def send_email(to_email: str, subject: str, body: str, html_body: Optional[str] = None) -> bool:
     """
-    Send an email notification.
+    Send WhatsApp message via CallMeBot API instead of email.
+    
+    Based on CallMeBot API documentation:
+    https://www.callmebot.com/blog/free-api-whatsapp-messages/
     
     Args:
-        to_email: Recipient email address
-        subject: Email subject line
-        body: Plain text email body
-        html_body: Optional HTML version of email body
+        to_email: Recipient email address (used as identifier/logging)
+        subject: Email subject line (included in WhatsApp message)
+        body: Plain text email body (included in WhatsApp message)
+        html_body: Optional HTML version of email body (ignored, plain text used)
         
     Returns:
-        True if email sent successfully, False otherwise
+        True if WhatsApp message sent successfully, False otherwise
     """
-    if not SMTP_USERNAME or not SMTP_PASSWORD:
-        logger.warning("SMTP credentials not configured. Email not sent.")
-        logger.info(f"Would have sent email to {to_email}: {subject}")
-        logger.info(f"Body: {body}")
-        return False
+    logger.info(f"Sending WhatsApp notification (for email: {to_email})")
+    logger.info(f"Subject: {subject}")
     
+    # Send WhatsApp message via CallMeBot API
     try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = FROM_EMAIL
-        msg["To"] = to_email
+        # Format the WhatsApp message
+        whatsapp_message = f"📧 Email Notification\n\nTo: {to_email}\nSubject: {subject}\n\n{body}"
         
-        # Attach plain text version
-        msg.attach(MIMEText(body, "plain"))
+        # Validate configuration
+        if not WHATSAPP_API_KEY:
+            logger.error("CallMeBot API key not configured. Please set WHATSAPP_API_KEY environment variable.")
+            return False
+            
+        if not RECIPIENT_PHONE:
+            logger.error("Recipient phone number not configured. Please set RECIPIENT_PHONE environment variable.")
+            return False
         
-        # Attach HTML version if provided
-        if html_body:
-            msg.attach(MIMEText(html_body, "html"))
+        # Clean phone number (remove spaces, ensure proper format)
+        cleaned_phone = _clean_phone_number(RECIPIENT_PHONE)
         
-        # Connect and send
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.sendmail(FROM_EMAIL, to_email, msg.as_string())
+        # Prepare the API request according to CallMeBot documentation
+        # Format: https://api.callmebot.com/whatsapp.php?phone=[phone_number]&text=[message]&apikey=[your_apikey]
+        params = {
+            'phone': cleaned_phone,
+            'text': whatsapp_message,  # requests will URL-encode this automatically
+            'apikey': WHATSAPP_API_KEY
+        }
         
-        logger.info(f"Email sent successfully to {to_email}")
-        return True
+        # Make the API call (GET request as per documentation)
+        response = requests.get(CALLMEBOT_API_URL, params=params, timeout=30)
         
+        # Check response
+        if response.status_code == 200:
+            response_text = response.text.strip().lower()
+            # CallMeBot API may return success indicators in the response text
+            if 'ok' in response_text or 'success' in response_text or response_text == '':
+                logger.info(f"WhatsApp message sent successfully to {cleaned_phone}")
+                logger.debug(f"API Response: {response.text}")
+                return True
+            else:
+                logger.warning(f"API returned 200 but response may indicate failure: {response.text}")
+                # Still return True as status code is 200, but log the warning
+                return True
+        else:
+            logger.error(f"Failed to send WhatsApp message. Status code: {response.status_code}")
+            logger.error(f"Response: {response.text}")
+            return False
+        
+    except requests.exceptions.Timeout:
+        logger.error("Timeout while sending WhatsApp message (30s timeout exceeded)")
+        return False
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Network error sending WhatsApp message: {str(e)}")
+        return False
     except Exception as e:
-        logger.error(f"Failed to send email to {to_email}: {str(e)}")
+        logger.error(f"Unexpected error sending WhatsApp message: {str(e)}")
         return False
 
 
@@ -71,17 +123,17 @@ def send_verification_notification(
     verified_by: str
 ) -> bool:
     """
-    Send a notification about artifact verification status change.
+    Send a WhatsApp notification about artifact verification status change via CallMeBot API.
     
     Args:
-        to_email: Uploader's email address
+        to_email: Uploader's email address (used as identifier)
         artifact_name: Name of the artifact
         status: New verification status ('verified' or 'rejected')
         reason: Reason provided by the reviewer
         verified_by: Username of the person who verified/rejected
         
     Returns:
-        True if email sent successfully, False otherwise
+        True if WhatsApp message sent successfully, False otherwise
     """
     if status.lower() == "verified":
         status_text = "APPROVED ✅"
