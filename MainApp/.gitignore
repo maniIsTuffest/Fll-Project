@@ -21,8 +21,6 @@ Thumbs.db
 dist/
 build/
 target/
-frontend/pkg/
-frontend/dist/
 
 # Database
 *.db
