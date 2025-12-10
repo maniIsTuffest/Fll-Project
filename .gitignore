@@ -1,22 +1,2 @@
-# Python virtual environment
-venv/
-env/
-__pycache__/
-*.pyc
-
-# Node dependencies
-node_modules/
-
-# IDE specific files
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-Thumbs.db
+# Created by venv; see https://docs.python.org/3/library/venv.html
+*
