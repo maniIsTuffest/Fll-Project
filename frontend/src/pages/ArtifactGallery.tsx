@@ -23,6 +23,40 @@ export default function ArtifactGallery() {
     loadArtifacts(query)
   }, [searchParams, sortBy, sortOrder]) // reload when sorting changes
 
+  function sortArtifacts(this: any, type: string) { // To Rick: pls look at comments before "fixing" it
+    // objects are like a list of stuff, eg let OBJECT1 = {key1:"wsp",key2:"wsp2"}; or sum like that 
+    // Check if the input is a valid object
+      if (this === null || typeof this !== 'object' || Array.isArray(this)) {
+          console.error("The 'this' context must be a non-array object.");
+        return undefined;
+      }
+
+      let sortedData;
+
+      if (type === "name") {
+          // 1. Get the keys of the original object
+        const keys = Object.keys(this);
+
+        // 2. Sort the keys alphabetically
+        keys.sort();
+
+        // 3. Create a new object by iterating over the sorted keys
+        const ordered = keys.reduce(
+            (obj: { [x: string]: any }, key: string) => {
+                // Assign the value from the original object to the new object
+                obj[key] = this[key]; 
+                return obj;
+            },
+            {} // Start with an empty object
+        );
+
+        sortedData = ordered;
+      }
+    
+      // Ensure something is returned even if type is not "name"
+      return sortedData;
+  }
+
   const loadArtifacts = async (query: string = '') => {
     setLoading(true)
     try {
@@ -44,7 +78,8 @@ export default function ArtifactGallery() {
         }
       } else {
         // Use sorting here
-        data = await artifactApi.getAll()
+        data = await artifactApi.getAll();
+        data = data.sortArtifacts("name");
       }
 
       setArtifacts(data)
