@@ -1,22 +1,33 @@
+import Cookies  from 'js-cookie';
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { api } from '../services/api'
 import './Login.css'
 
+
 export default function Login() {
-  const [username, setUsername] = useState('')
+  const [username, setUsername] = useState('') 
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const { login } = useAuth()
   const navigate = useNavigate()
+  
+  const handleLogin = () => {
+    // Saves Cookies (Hopefully)
+    Cookies.set(username, username, { expires: 7  });
+    console.log(username); // Shows user
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
     setLoading(true)
 
+
+
+    
     try {
       // First, try to authenticate with the backend
       // Since we don't have a proper auth endpoint yet, we'll check credentials directly
@@ -71,7 +82,7 @@ export default function Login() {
             />
           </div>
           {error && <div className="error-message">{error}</div>}
-          <button type="submit" disabled={loading} className="login-button">
+          <button type="submit" disabled={loading} className="login-button" onClick={handleLogin}>
             {loading ? 'Logging in...' : 'Login'}
           </button>
         </form>

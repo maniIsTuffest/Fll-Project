@@ -128,7 +128,7 @@ class PasswordChange(BaseModel):
 async def login(request: LoginRequest):
     """Authenticate user and return user info"""
     try:
-        DB_FILE = os.path.join(PROJECT_DIR, "users.db")
+        DB_FILE = os.path.join(PROJECT_DIR, "MainApp", "users.db")
         with sqlite3.connect(DB_FILE, timeout=10) as conn:
             c = conn.cursor()
             c.execute("SELECT username, name, hashed_password, role, email FROM users WHERE username=?", (request.username,))
