@@ -23,38 +23,39 @@ export default function ArtifactGallery() {
     loadArtifacts(query)
   }, [searchParams, sortBy, sortOrder]) // reload when sorting changes
 
-  function sortArtifacts(this: any, type: string) { // To Rick: pls look at comments before "fixing" it
-    // objects are like a list of stuff, eg let OBJECT1 = {key1:"wsp",key2:"wsp2"}; or sum like that 
-    // Check if the input is a valid object
-      if (this === null || typeof this !== 'object' || Array.isArray(this)) {
-          console.error("The 'this' context must be a non-array object.");
-        return undefined;
+  const sortArtifacts = (items: Artifact[]) => {
+    return [...items].sort((a, b) => {
+      let comparison = 0;
+      
+      switch (sortBy) {
+        case 'name':
+          comparison = (a.name || '').localeCompare(b.name || '');
+          break;
+        case 'uploaded_at': {
+          const parseDate = (dateStr: string | undefined): number => {
+            if (!dateStr) return 0;
+            // Handle both ISO strings and other formats
+            const date = new Date(dateStr);
+            // If date is invalid, return 0 to sort it at the beginning/end
+            return isNaN(date.getTime()) ? 0 : date.getTime();
+          };
+          const dateA = parseDate(a.uploaded_at);
+          const dateB = parseDate(b.uploaded_at);
+          comparison = dateA - dateB;
+          break;
+        }
+        case 'confidence':
+          comparison = (a.confidence || 0) - (b.confidence || 0);
+          break;
+        case 'tier':
+          comparison = (a.tier || '').localeCompare(b.tier || '');
+          break;
+        default:
+          comparison = 0;
       }
-
-      let sortedData;
-
-      if (type === "name") {
-          // 1. Get the keys of the original object
-        const keys = Object.keys(this);
-
-        // 2. Sort the keys alphabetically
-        keys.sort();
-
-        // 3. Create a new object by iterating over the sorted keys
-        const ordered = keys.reduce(
-            (obj: { [x: string]: any }, key: string) => {
-                // Assign the value from the original object to the new object
-                obj[key] = this[key]; 
-                return obj;
-            },
-            {} // Start with an empty object
-        );
-
-        sortedData = ordered;
-      }
-    
-      // Ensure something is returned even if type is not "name"
-      return sortedData;
+      
+      return sortOrder === 'asc' ? comparison : -comparison;
+    });
   }
 
   const loadArtifacts = async (query: string = '') => {
@@ -77,10 +78,11 @@ export default function ArtifactGallery() {
           )
         }
       } else {
-        // Use sorting here
         data = await artifactApi.getAll();
-        data = data.sortArtifacts("name");
       }
+      
+      // Apply sorting to the data
+      data = sortArtifacts(data);
 
       setArtifacts(data)
     } catch (error) {
